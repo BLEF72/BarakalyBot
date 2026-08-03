@@ -1,17 +1,21 @@
 from datetime import datetime, timedelta
 import logging
-
+from utils.time_utils import get_now
+from texts import md_escape
 from database import Session, Package, Restaurant
+from utils.helpers import get_lang
 
 log = logging.getLogger(__name__)
 
 
 def get_available(district: str = None):
     with Session() as s:
+        today = get_now().date()
         q = (
             s.query(Package, Restaurant)
             .join(Restaurant, Package.restaurant_id == Restaurant.id)
-            .filter(Package.active == True, Package.quantity > 0, Restaurant.active == True)
+            .filter(Package.active == True, Package.quantity > 0, Restaurant.active == True,
+                    Package.available_date == today)
         )
         if district and district != "ALL":
             q = q.filter(Restaurant.district == district)
@@ -42,6 +46,7 @@ def create_package(restaurant_id: int, name: str, photo_file_id: str,
             quantity=quantity,
             pickup_from=pickup_from,
             pickup_to=pickup_to,
+            available_date=get_now().date(),
             active=True,
         )
         s.add(pkg)
@@ -53,10 +58,11 @@ def create_package(restaurant_id: int, name: str, photo_file_id: str,
 
 def get_all_active():
     with Session() as s:
+        today = get_now().date()
         rows = (
             s.query(Package, Restaurant)
             .join(Restaurant)
-            .filter(Package.active == True)
+            .filter(Package.active == True, Package.available_date == today)
             .all()
         )
         result = []
@@ -68,22 +74,28 @@ def get_all_active():
 
 def count_active() -> int:
     with Session() as s:
-        return s.query(Package).filter_by(active=True).count()
+        today = get_now().date()
+        return (
+            s.query(Package)
+            .filter(Package.active == True, Package.available_date == today)
+            .count()
+        )
 
 
 async def nightly_cleanup(bot):
-    """Планировщик: деактивирует пустые пакеты старше 1 дня"""
+    """Планировщик: деактивирует все вчерашние и более старые пакеты,
+    независимо от остатка - "протухшие" листинги не должны воскресать"""
     with Session() as s:
-        cutoff  = datetime.utcnow() - timedelta(days=1)
-        old     = s.query(Package).filter(
-            Package.quantity == 0,
-            Package.created_at < cutoff,
+        today = get_now().date()
+        old = s.query(Package).filter(
+            Package.available_date < today,
+            Package.active == True,
         ).all()
         for p in old:
             p.active = False
         if old:
             s.commit()
-            log.info(f"Deactivated {len(old)} empty packages")
+            log.info(f"Deactivated {len(old)} stale packages")
 
 def update_price(pkg_id: int, price: int):
     with Session() as s:
@@ -196,25 +208,33 @@ async def auto_open_restaurants(bot):
     from config import ADMIN_IDS
 
     with Session() as s:
+        today = get_now().date()
         closed = s.query(Restaurant).filter_by(is_closed=True, active=True).all()
+
+        payload = []
         for rest in closed:
             rest.is_closed = False
-            pkgs = s.query(Package).filter_by(restaurant_id=rest.id).all()
+            pkgs = s.query(Package).filter_by(
+                restaurant_id=rest.id, available_date=today
+            ).all()
             for pkg in pkgs:
                 pkg.active = True
-            # Уведомляем владельца
             if rest.owner_id:
-                try:
-                    lang = get_lang(rest.owner_id)
-                    await bot.send_message(
-                        rest.owner_id,
-                        "🟢 " + (f"*{rest.name}* автоматически открыто!" if lang == "ru"
-                                 else f"*{rest.name}* avtomatik ochildi!"),
-                        parse_mode="Markdown"
-                    )
-                except Exception:
-                    pass
+                payload.append((rest.owner_id, rest.name))
+
         if closed:
             s.commit()
-            
+
+    for owner_id, rest_name in payload:
+        try:
+            lang = get_lang(owner_id)
+            safe_name = md_escape(rest_name)
+            await bot.send_message(
+                owner_id,
+                "🟢 " + (f"*{safe_name}* автоматически открыто!" if lang == "ru"
+                         else f"*{safe_name}* avtomatik ochildi!"),
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 

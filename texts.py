@@ -20,9 +20,9 @@ TX = {
     "welcome": {
         "ru": (
             "Добро пожаловать в Barakaly! 🍱\n\n"
-            "Покупай свежую еду со скидкой 50–70%.\n"
+            "Покупайте свежую еду со скидкой 50–70%.\n"
             "Кафе и пекарни продают остатки дня — дёшево и вкусно!\n\n"
-            "Используй кнопки ниже 👇"
+            "Используйте кнопки ниже 👇"
         ),
         "uz": (
             "Barakaly ga xush kelibsiz! 🍱\n\n"
@@ -89,6 +89,10 @@ TX = {
         "ru": "⏰ Бронь `{code}` истекла и отменена. Пакет снова доступен.",
         "uz": "⏰ `{code}` broni muddati o'tdi va bekor qilindi."
     },
+"pickup_closed": {
+    "ru": "😔 Окно выдачи уже закрылось.",
+    "uz": "😔 Yetkazib berish oynasi allaqachon yopilgan."
+},
 
     # Мои заказы
     "my_orders_empty": {
@@ -201,22 +205,24 @@ TX = {
     "cancelled":  {"ru": "❌ Отменено.",   "uz": "❌ Bekor qilindi."},
 
     # Админ
-    "admin_stats": {
-        "ru": (
-            "📊 *Статистика:*\n"
-            "🏪 Заведений: {rests}\n"
-            "📦 Пакетов (активных): {pkgs}\n"
-            "🧾 Заказов всего: {orders}\n"
-            "✅ Выдано: {done}\n"
-            "👥 Пользователей: {users}"
-        ),
+"admin_stats": {
+    "ru": (
+        "📊 *Статистика Barakly*\n\n"
+        "🏪 Заведений: {rests}\n"
+        "📦 Активных пакетов: {pkgs}\n"
+        "🛍 Заказов всего: {orders}\n"
+        "✅ Выдано: {done}\n"
+        "👥 Пользователей: {users}\n"
+        "💰 Комиссия платформы: {commission:,} сум"
+    ),
         "uz": (
             "📊 *Statistika:*\n"
             "🏪 Muassasalar: {rests}\n"
             "📦 Paketlar (faol): {pkgs}\n"
             "🧾 Jami buyurtmalar: {orders}\n"
             "✅ Berilgan: {done}\n"
-            "👥 Foydalanuvchilar: {users}"
+            "👥 Foydalanuvchilar: {users}\n"
+            "💰 Komissiya: {commission:,}som"
         )
     },
     "admin_add_rest_name":    {"ru": "🏪 Шаг 1/6: Название заведения:",            "uz": "🏪 1/6-qadam: Muassasa nomi:"},
@@ -383,6 +389,7 @@ TX = {
         "  📦 Заказов: {orders}\n"
         "  ✅ Выдано: {done}\n"
         "  ❌ Отменено: {cancelled}\n"
+        "  👻 Не пришли: {no_show}\n"
         "  💰 Выручка: {revenue:,} сум\n"
         "  ⭐ Рейтинг: {rating}\n\n"
         "📈 За всё время:\n"
@@ -395,9 +402,10 @@ TX = {
         "  📦 Buyurtmalar: {orders}\n"
         "  ✅ Berilgan: {done}\n"
         "  ❌ Bekor qilingan: {cancelled}\n"
+        "  👻 Kelmadi: {no_show}\n"
         "  💰 Daromad: {revenue:,} so'm\n"
         "  ⭐ Reyting: {rating}\n\n"
-        "📈 Jami:\n"
+        "📈 Jami:\n"    
         "  📦 Jami buyurtmalar: {total}\n"
         "  💰 Umumiy daromad: {total_revenue:,} so'm"
     ),
@@ -654,14 +662,40 @@ TX = {
     "ru": "🟢 Заведение открыто! Пакеты снова доступны.",
     "uz": "🟢 Muassasa ochildi! Paketlar yana mavjud."
 },
+"order_not_yours": {
+    "ru": "❌ Этот заказ принадлежит другому заведению.",
+    "uz": "❌ Bu buyurtma boshqa muassasaga tegishli."
+},
+"order_expired_no_show": {
+    "ru": "⌛ Время брони истекло, покупатель не пришёл вовремя, отметить выданным нельзя.",
+    "uz": "⌛ Bu bron muddati tugagan, xaridor o'z vaqtida kelmadi, 'Berildi' deb belgilab bo'lmaydi."
+},
+
 }
+
+
+def md_escape(text) -> str:
+    """Экранирует спецсимволы старого Markdown в данных из БД
+    (названия заведений, адреса и т.п.), чтобы они не ломали parse_mode=Markdown"""
+    if text is None:
+        return ""
+    text = str(text)
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, "\\" + ch)
+    return text
 
 
 def t(key: str, lang: str, **kwargs) -> str:
     """Получить текст по ключу и языку"""
     entry = TX.get(key, {})
     text  = entry.get(lang) or entry.get("ru") or "???"
-    return text.format(**kwargs) if kwargs else text
+    if kwargs:
+        safe_kwargs = {
+            k: md_escape(v) if isinstance(v, str) else v
+            for k, v in kwargs.items()
+        }
+        return text.format(**safe_kwargs)
+    return text
 
 
 def status_label(status: str, lang: str) -> str:

@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from database import Session, Package, Restaurant, User
 from texts import t
 from utils.helpers import get_lang, is_admin, is_owner, get_owner_restaurant, get_owner_restaurants
+from utils.time_utils import get_now
 from utils.constants import O_NAME, O_PHOTO, O_PRICE, O_QTY, O_TIME, O_EDIT_PRICE, O_EDIT_QTY, O_TEMPLATE_QTY, O_UPDATE_PHOTO, O_EDIT_TIME
 from keyboards.inline import owner_panel_keyboard
 from services import order_service, package_service, template_service
@@ -69,7 +70,7 @@ async def _show_rest_panel(update, ctx, lang, rest, send_func="message"):
             s.query(Order).join(Package, Order.package_id == Package.id)
             .filter(Package.restaurant_id == rest.id, Order.status == "used").count()
         )
-        now = datetime.utcnow()
+        now = get_now()
         month_orders = (
             s.query(Order).join(Package, Order.package_id == Package.id)
             .filter(Package.restaurant_id == rest.id,
@@ -77,7 +78,9 @@ async def _show_rest_panel(update, ctx, lang, rest, send_func="message"):
             .count()
         )
         revenue = (
-            s.query(func.sum(Package.price)).join(Order, Order.package_id == Package.id)
+            s.query(func.sum(func.coalesce(Order.price, Package.price)))
+            .select_from(Package)
+            .join(Order, Order.package_id == Package.id)
             .filter(Package.restaurant_id == rest.id, Order.status == "used").scalar()
         ) or 0
 
@@ -162,7 +165,7 @@ async def owner_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             msg = "Bugun buyurtma yo'q." if lang == "uz" else "Сегодня заказов нет."
             await query.edit_message_text(msg)
             return
-        icons = {"reserved": "⏳", "active": "✅", "used": "🎉", "cancelled": "❌"}
+        icons = {"reserved": "⏳", "active": "✅", "used": "🎉", "cancelled": "❌", "expired": "👻"}
         text  = "Bugungi buyurtmalar:\n\n" if lang == "uz" else "Заказы сегодня:\n\n"
         for o, pkg in rows:
             icon  = icons.get(o.status, "❓")
@@ -345,30 +348,30 @@ async def handle_pickup_time(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _save_package(update, ctx, lang)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ШАГИ ДОБАВЛЕНИЯ ПАКЕТА
-# ══════════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════════
+    # ШАГИ ДОБАВЛЕНИЯ ПАКЕТА
+    # ══════════════════════════════════════════════════════════════════════════════
 
 async def o_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(update.effective_user.id)
-    ctx.user_data["new_pkg"]["name"] = update.message.text.strip()
-    ctx.user_data["pkg_state"]       = O_PHOTO
+        lang = get_lang(update.effective_user.id)
+        ctx.user_data["new_pkg"]["name"] = update.message.text.strip()
+        ctx.user_data["pkg_state"]       = O_PHOTO
 
-    skip_kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(t("btn_skip_photo", lang), callback_data="skip_pkg_photo")
-    ]])
-    await update.message.reply_text(t("ask_pkg_photo", lang), parse_mode="Markdown", reply_markup=skip_kb)
-    return O_PHOTO
+        skip_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(t("btn_skip_photo", lang), callback_data="skip_pkg_photo")
+        ]])
+        await update.message.reply_text(t("ask_pkg_photo", lang), parse_mode="Markdown", reply_markup=skip_kb)
+        return O_PHOTO
 
 
 async def o_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(update.effective_user.id)
-    ctx.user_data["new_pkg"]["photo_file_id"] = (
-        update.message.photo[-1].file_id if update.message.photo else None
-    )
-    ctx.user_data["pkg_state"] = O_PRICE
-    await update.message.reply_text(t("ask_pkg_price", lang), parse_mode="Markdown")
-    return O_PRICE
+        lang = get_lang(update.effective_user.id)
+        ctx.user_data["new_pkg"]["photo_file_id"] = (
+            update.message.photo[-1].file_id if update.message.photo else None
+        )
+        ctx.user_data["pkg_state"] = O_PRICE
+        await update.message.reply_text(t("ask_pkg_price", lang), parse_mode="Markdown")
+        return O_PRICE
 
 
 async def o_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -441,6 +444,7 @@ async def _save_package(update, ctx, lang):
             quantity      = data["quantity"],
             pickup_from   = pickup_from,
             pickup_to     = pickup_to,
+            available_date = get_now().date(),
             active        = True,
         ))
         s.commit()
@@ -485,16 +489,35 @@ async def _save_package(update, ctx, lang):
         subscription_service.get_subscribers_for_restaurant(data["restaurant_id"]) +
         subscription_service.get_subscribers_for_district(rest_district)
     )
-    for user_id in subscribers:
-        try:
-            user_lang = get_lang(user_id)
-            msg = t("new_pkg_notify", user_lang,
-                    rest=rest_name, name=data["name"],
-                    price=data["price"], qty=data["quantity"],
-                    from_=pickup_from, to=pickup_to, address=rest_address)
-            await bot.send_message(user_id, msg, parse_mode="Markdown")
-        except Exception:
-            pass
+
+    async def _notify_subscribers(subscribers, rest_name, pkg_name, price, qty, pfrom, pto, address):
+        import asyncio
+        from telegram.error import RetryAfter, Forbidden
+
+        for user_id in subscribers:
+            try:
+                user_lang = get_lang(user_id)
+                msg = t("new_pkg_notify", user_lang,
+                        rest=rest_name, name=pkg_name,
+                        price=price, qty=qty,
+                        from_=pfrom, to=pto, address=address)
+                await bot.send_message(user_id, msg, parse_mode="Markdown")
+            except RetryAfter as e:
+                await asyncio.sleep(e.retry_after)
+                try:
+                    await bot.send_message(user_id, msg, parse_mode="Markdown")
+                except Exception:
+                    pass
+            except Forbidden:
+                pass  # пользователь заблокировал бота - пропускаем
+            except Exception:
+                pass
+            await asyncio.sleep(0.05)  # не больше ~20 сообщений в секунду
+
+    ctx.application.create_task(
+        _notify_subscribers(subscribers, rest_name, data["name"], data["price"],
+                            data["quantity"], pickup_from, pickup_to, rest_address)
+    )
 
     ctx.user_data.clear()
 
@@ -575,6 +598,7 @@ async def o_template_qty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 quantity      = qty,
                 pickup_from   = tpl.pickup_from,
                 pickup_to     = tpl.pickup_to,
+                available_date = get_now().date(),
                 active        = True,
             ))
             s.commit()

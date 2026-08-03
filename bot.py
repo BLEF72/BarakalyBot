@@ -1,10 +1,11 @@
 import logging
+from telegram import Update
 from telegram.ext import (
 Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ConversationHandler,)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, ADMIN_IDS
 from database import init_db
 
 from utils.constants import LANG_SELECT, A_NAME, A_ADDRESS, A_DISTRICT,A_OWNER, A_PHOTO, A_LOCATION, O_NAME, O_PHOTO,O_PRICE, O_QTY, O_TIME, O_EDIT_PRICE,O_EDIT_QTY, O_TEMPLATE_QTY, O_UPDATE_PHOTO,O_EDIT_TIME, O_SELECT_REST
@@ -17,6 +18,7 @@ from handlers.orders import done_callback, review_callback
 from handlers.support import support_cancel_callback, support_reply_callback
 from services.order_service import expire_old_reservations, send_pickup_reminders, check_unblocked_users
 from services.package_service import nightly_cleanup, auto_open_restaurants
+from services.backup_service import backup_database
 
 
 from services.order_service   import expire_old_reservations
@@ -210,6 +212,8 @@ def build_app() -> Application:
                           args=[application.bot])
         scheduler.add_job(nightly_cleanup, "cron", hour=3, minute=0,
                           args=[application.bot])
+        scheduler.add_job(backup_database, "cron", hour=4, minute=0,
+                          args=[application.bot])
         scheduler.add_job(send_weekly_reports, "cron",
                           day_of_week="mon", hour=9, minute=0,
                           args=[application.bot])
@@ -221,6 +225,35 @@ def build_app() -> Application:
         log.info("✅ Scheduler запущен")
 
     app.post_init = on_startup
+
+    # -- Обработка ошибок --
+    async def on_error(update: object, ctx):
+        from telegram.error import NetworkError
+
+        if isinstance(ctx.error, NetworkError):
+            # Временный сетевой сбой при polling - библиотека сама
+            # переподключится, не стоит будить админа на каждый обрыв связи
+            log.warning("Временный сетевой сбой: %s", ctx.error)
+            return
+
+        log.exception("Handler error", exc_info=ctx.error)
+        for aid in ADMIN_IDS:
+            try:
+                await ctx.bot.send_message(
+                    aid, f"Error: {type(ctx.error).__name__}: {ctx.error}"[:3500]
+                )
+            except Exception:
+                pass
+        if isinstance(update, Update) and update.effective_chat:
+            try:
+                await ctx.bot.send_message(
+                    update.effective_chat.id, "Произошла ошибка. Попробуйте ещё раз."
+                )
+            except Exception:
+                pass
+
+    app.add_error_handler(on_error)
+
     return app
 
 

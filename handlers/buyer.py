@@ -1,4 +1,3 @@
-from turtle import update
 from keyboards.main import main_keyboard
 from telegram import InlineKeyboardButton, Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -9,6 +8,8 @@ from utils.helpers import get_lang, get_pickup_status, log_event
 from keyboards.inline import district_keyboard, reserve_keyboard, favorite_keyboard
 from services import package_service, order_service, favorite_service, review_service, subscription_service
 
+
+_processing_reservations = set()
 
 async def show_districts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
@@ -24,6 +25,8 @@ async def district_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid      = query.from_user.id
     lang     = get_lang(uid)
     district = query.data.replace("district_", "")
+
+    log_event("browse", uid, district=district)
 
     rows = package_service.get_available(district)
 
@@ -89,12 +92,17 @@ async def reserve_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang   = get_lang(uid)
     pkg_id = int(query.data.replace("reserve_", ""))
 
+    if uid in _processing_reservations:
+        return
+    _processing_reservations.add(uid)
+
     from database import Session, Package, Restaurant
     with Session() as s:
         pkg  = s.query(Package).filter_by(id=pkg_id, active=True).first()
         rest = s.query(Restaurant).filter_by(id=pkg.restaurant_id).first() if pkg else None
         if not pkg or pkg.quantity <= 0 or not rest:
             await ctx.bot.send_message(uid, t("already_taken", lang))
+            _processing_reservations.discard(uid)
             return
         rest_name = rest.name
         rest_addr = rest.address
@@ -104,66 +112,69 @@ async def reserve_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pkg_name  = pkg.name
 
     try:
-        username = query.from_user.username or query.from_user.first_name
-        code = order_service.create_reservation(pkg_id, uid, username)
-    except ValueError as e:
-        err = str(e)
-        if "user_blocked" in err:
-            await ctx.bot.send_message(uid, t("user_blocked", lang))
-        elif "user_limited" in err:
-            await ctx.bot.send_message(uid, t("user_limited", lang))
-        elif "max_reservations" in err:
-            await ctx.bot.send_message(uid, t("max_reservations", lang))
-        else:
-            await ctx.bot.send_message(uid, t("already_taken", lang))
-        return
-
-
-
-    # Получаем reserved_until
-    from database import Session as DBSession, Order as DBOrder
-    with DBSession() as s:
-        created_order = s.query(DBOrder).filter_by(code=code).first()
-        until_str = created_order.reserved_until.strftime("%H:%M") if created_order else "—"
-
-    cancel_kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(t("btn_cancel_order", lang), callback_data=f"cancel_order_{code}")
-    ]])
-
-    await ctx.bot.send_message(
-        uid,
-        t("reserve_confirm", lang, code=code, rest=rest_name,
-          address=rest_addr, from_=pfrom, to=pto, until=until_str),
-        parse_mode="Markdown",
-        reply_markup=cancel_kb,
-    )
-
-    notif   = (
-        f"🆕 *Новая бронь!*\n"
-        f"Код: `{code}`\n"
-        f"👤 @{query.from_user.username or query.from_user.first_name}\n"
-        f"🛍 {pkg_name} — {rest_name}"
-    )
-    mark_kb = mark_done_keyboard(code)
-
-    for aid in ADMIN_IDS:
         try:
-            await ctx.bot.send_message(aid, notif, parse_mode="Markdown", reply_markup=mark_kb)
-        except Exception:
-            pass
+            username = query.from_user.username or query.from_user.first_name
+            code = order_service.create_reservation(pkg_id, uid, username)
+        except ValueError as e:
+            err = str(e)
+            if "user_blocked" in err:
+                await ctx.bot.send_message(uid, t("user_blocked", lang))
+            elif "user_limited" in err:
+                await ctx.bot.send_message(uid, t("user_limited", lang))
+            elif "max_reservations" in err:
+                await ctx.bot.send_message(uid, t("max_reservations", lang))
+            elif "pickup_closed" in err:
+                await ctx.bot.send_message(uid, t("pickup_closed", lang))
+            else:
+                await ctx.bot.send_message(uid, t("already_taken", lang))
+            return
 
-    if owner_id and owner_id not in ADMIN_IDS:
-        try:
-            owner_lang  = get_lang(owner_id)
-            notif_owner = (
-                f"🆕 {'Yangi bron' if owner_lang == 'uz' else 'Новая бронь'}!\n"
-                f"Kod: `{code}`\n"
-                f"🛍 {pkg_name}"
-            )
-            await ctx.bot.send_message(owner_id, notif_owner, parse_mode="Markdown",
-                                       reply_markup=mark_kb)
-        except Exception:
-            pass
+        # Получаем reserved_until
+        from database import Session as DBSession, Order as DBOrder
+        with DBSession() as s:
+            created_order = s.query(DBOrder).filter_by(code=code).first()
+            until_str = created_order.reserved_until.strftime("%H:%M") if created_order else "—"
+
+        cancel_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(t("btn_cancel_order", lang), callback_data=f"cancel_order_{code}")
+        ]])
+
+        await ctx.bot.send_message(
+            uid,
+            t("reserve_confirm", lang, code=code, rest=rest_name,
+              address=rest_addr, from_=pfrom, to=pto, until=until_str),
+            parse_mode="Markdown",
+            reply_markup=cancel_kb,
+        )
+
+        notif   = (
+            f"🆕 *Новая бронь!*\n"
+            f"Код: `{code}`\n"
+            f"👤 @{query.from_user.username or query.from_user.first_name}\n"
+            f"🛍 {pkg_name} — {rest_name}"
+        )
+        mark_kb = mark_done_keyboard(code)
+
+        for aid in ADMIN_IDS:
+            try:
+                await ctx.bot.send_message(aid, notif, parse_mode="Markdown", reply_markup=mark_kb)
+            except Exception:
+                pass
+
+        if owner_id and owner_id not in ADMIN_IDS:
+            try:
+                owner_lang  = get_lang(owner_id)
+                notif_owner = (
+                    f"🆕 {'Yangi bron' if owner_lang == 'uz' else 'Новая бронь'}!\n"
+                    f"Kod: `{code}`\n"
+                    f"🛍 {pkg_name}"
+                )
+                await ctx.bot.send_message(owner_id, notif_owner, parse_mode="Markdown",
+                                           reply_markup=mark_kb)
+            except Exception:
+                pass
+    finally:
+        _processing_reservations.discard(uid)
 
 
 
@@ -176,7 +187,7 @@ async def my_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t("my_orders_empty", lang), parse_mode="Markdown")
         return
 
-    icons = {"reserved": "⏳", "active": "✅", "used": "🎉", "cancelled": "❌"}
+    icons = {"reserved": "⏳", "active": "✅", "used": "🎉", "cancelled": "❌", "expired": "👻"}
 
     for order, pkg, rest in rows:
         icon = icons.get(order.status, "❓")
@@ -474,7 +485,7 @@ async def rebook_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query  = update.callback_query
     await query.answer()
     uid    = query.from_user.id
-    status  = get_pickup_status(pkg.pickup_from, pkg.pickup_to, lang)
+    
     
     lang   = get_lang(uid)
     pkg_id = int(query.data.replace("rebook_", ""))
@@ -501,6 +512,8 @@ async def rebook_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError as e:
         if "max_reservations" in str(e):
             await ctx.bot.send_message(uid, t("max_reservations", lang))
+        elif "pickup_closed" in str(e):
+            await ctx.bot.send_message(uid, t("pickup_closed", lang))
         else:
             await ctx.bot.send_message(uid, t("rebook_unavailable", lang))
         return
@@ -520,7 +533,7 @@ async def rebook_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         t("reserve_confirm", lang, code=code, rest=rest_name,
           address=rest_addr, from_=pfrom, to=pto, until=until_str),
         parse_mode="Markdown",
-        reply_markup=cancel_kb, status=status
+        reply_markup=cancel_kb,
     )
 
     log_event("order", uid)

@@ -1,11 +1,12 @@
-from unittest import result
-
+import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from texts import t
 from utils.helpers import get_lang
 from services import order_service
+
+log = logging.getLogger(__name__)
 
 
 
@@ -16,7 +17,7 @@ async def done_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(uid)
     code = query.data.replace("done_", "")
 
-    result = order_service.mark_done(code)
+    result = order_service.mark_done(code, actor_id=uid)
     await query.edit_message_reply_markup(reply_markup=None)
 
     if result == "ok":
@@ -28,6 +29,10 @@ async def done_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.send_message(uid, t("order_already_done", lang))
     elif result == "cancelled":
         await ctx.bot.send_message(uid, t("order_was_cancelled", lang))
+    elif result == "expired":
+        await ctx.bot.send_message(uid, t("order_expired_no_show", lang))
+    elif result == "not_yours":
+        await ctx.bot.send_message(uid, t("order_not_yours", lang))
     else:
         await ctx.bot.send_message(uid, t("order_not_found", lang))
 
@@ -37,7 +42,7 @@ async def mark_done_by_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(uid)
     code = update.message.text.strip().upper()
 
-    result = order_service.mark_done(code)
+    result = order_service.mark_done(code, actor_id=uid)
 
     if result == "ok":
         await _notify_buyer(ctx, code)
@@ -49,6 +54,10 @@ async def mark_done_by_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t("order_already_done", lang))
     elif result == "cancelled":
         await update.message.reply_text(t("order_was_cancelled", lang))
+    elif result == "expired":
+        await ctx.bot.send_message(uid, t("order_expired_no_show", lang))
+    elif result == "not_yours":
+        await ctx.bot.send_message(uid, t("order_not_yours", lang))
     else:
         await update.message.reply_text(t("order_not_found", lang))
 
@@ -88,7 +97,7 @@ async def review_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.answer(t("review_already", lang), show_alert=True)
     
 async def _notify_buyer(ctx, code: str):
-    print(f">>> _notify_buyer вызван, code={code}")
+    log.debug("_notify_buyer вызван, code=%s", code)
     from services.order_service import get_buyer_id
     from services import review_service
     from database import Session, Order, Package, Restaurant
@@ -120,9 +129,9 @@ async def _notify_buyer(ctx, code: str):
 
     # Отправляем запрос оценки через job_queue
     async def send_review(context):
-        print(f">>> send_review вызван, code={code}, buyer_id={buyer_id}")
+        log.debug("send_review вызван, code=%s, buyer_id=%s", code, buyer_id)
         if review_service.already_reviewed(code):
-            print(">>> уже оценил")
+            log.debug("уже оценил, code=%s", code)
             return
         try:
             from keyboards.inline import review_keyboard
@@ -138,5 +147,5 @@ async def _notify_buyer(ctx, code: str):
 
     ctx.application.job_queue.run_once(
         send_review,
-        when=10,  # 30 секунд для теста, потом поменяй на 1800 (30 минут)
+        when=10,  # 10 секунд после выдачи заказа
     )

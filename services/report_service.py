@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
 from sqlalchemy import func
 from database import Session, Order, Package, Restaurant
+from utils.time_utils import get_now
 from services.review_service import get_rating
 
 
 def get_restaurant_report(restaurant_id: int) -> dict:
     """Полный отчёт по заведению"""
-    now       = datetime.utcnow()
+    now       = get_now()
     week_ago  = now - timedelta(days=7)
 
     with Session() as s:
@@ -24,9 +25,11 @@ def get_restaurant_report(restaurant_id: int) -> dict:
         )
         week_done      = sum(1 for o in week_orders if o.status == "used")
         week_cancelled = sum(1 for o in week_orders if o.status == "cancelled")
-        week_revenue   = (
-            s.query(func.sum(Package.price))
-            .join(Order, Order.package_id == Package.id)
+        week_no_show   = sum(1 for o in week_orders if o.status == "expired")
+        week_revenue = (
+            s.query(func.sum(func.coalesce(Order.price, Package.price)))
+            .select_from(Order)
+            .join(Package, Order.package_id == Package.id)
             .filter(Package.restaurant_id == restaurant_id,
                     Order.status == "used",
                     Order.created_at >= week_ago)
@@ -41,8 +44,9 @@ def get_restaurant_report(restaurant_id: int) -> dict:
             .count()
         )
         total_revenue = (
-            s.query(func.sum(Package.price))
-            .join(Order, Order.package_id == Package.id)
+            s.query(func.sum(func.coalesce(Order.price, Package.price)))
+            .select_from(Order)
+            .join(Package, Order.package_id == Package.id)
             .filter(Package.restaurant_id == restaurant_id,
                     Order.status == "used")
             .scalar()
@@ -53,6 +57,7 @@ def get_restaurant_report(restaurant_id: int) -> dict:
             "orders":        len(week_orders),
             "done":          week_done,
             "cancelled":     week_cancelled,
+            "no_show":       week_no_show,
             "revenue":       week_revenue,
             "rating":        get_rating(restaurant_id),
             "total":         total_orders,

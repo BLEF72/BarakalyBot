@@ -2,30 +2,22 @@ import logging
 from datetime import datetime, timedelta
 
 from database import Session, Order, Package, Restaurant
-from config import RESERVE_MINUTES
+from config import RESERVE_MINUTES, ADMIN_IDS
 from utils.helpers import gen_code, get_lang
+from utils.time_utils import get_now
 from texts import t
-
-from datetime import datetime, timedelta, timezone
-
-TASHKENT = timezone(timedelta(hours=5))
-
-def get_now():
-    """Текущее время в Ташкенте"""
-    return datetime.now(TASHKENT).replace(tzinfo=None)
 
 log = logging.getLogger(__name__)
 
 
 def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
-    from datetime import date
     code = gen_code()
+
+    stats = get_user_stats(user_id)
     with Session() as s:
-        # Проверяем блокировку и рейтинг
-        stats = get_user_stats(user_id)
         if stats["blocked"]:
             raise ValueError("user_blocked")
-        
+
         # Лимит броней зависит от рейтинга
         max_reservations = 1 if stats["cancel_rate"] > 50 and stats["total"] >= 3 else 2
 
@@ -57,7 +49,15 @@ def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
         else:
             reserved_until = now + timedelta(hours=1)
 
-        pkg.quantity -= 1
+        updated = s.query(Package).filter(
+            Package.id == pkg_id,
+            Package.active == True,
+            Package.quantity > 0,
+        ).update({Package.quantity: Package.quantity - 1}, synchronize_session=False)
+
+        if not updated:
+            raise ValueError("sold_out")
+
         order = Order(
             code=code, package_id=pkg_id, user_id=user_id,
             username=username, status="reserved",
@@ -68,22 +68,40 @@ def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
     return code
 
 
-def mark_done(code: str) -> str:
+def mark_done(code: str, actor_id: int) -> str:
     """
     Отмечает заказ выданным.
-    Возвращает: 'ok' | 'already' | 'not_found' | 'cancelled'
+    Возвращает: 'ok' | 'already' | 'not_found' | 'cancelled' | 'not_yours'
     """
     with Session() as s:
-        order = s.query(Order).filter_by(code=code).first()
-        if not order:
+        row = (
+            s.query(Order, Restaurant)
+            .join(Package, Order.package_id == Package.id)
+            .join(Restaurant, Package.restaurant_id == Restaurant.id)
+            .filter(Order.code == code)
+            .first()
+        )
+        if not row:
             return "not_found"
+        order, rest = row
+
+        if rest.owner_id != actor_id and actor_id not in ADMIN_IDS:
+            return "not_yours"
+
         if order.status == "used":
             return "already"
         if order.status == "cancelled":
             return "cancelled"
+        if order.status == "expired":
+            return "expired"
         order.status       = "used"
         order.completed_at = get_now()
+        buyer_id = order.user_id
         s.commit()
+
+    from utils.helpers import log_event
+    log_event("complete", buyer_id)
+
     return "ok"
 
 
@@ -181,20 +199,32 @@ def cancel_by_user(code: str, user_id: int) -> str:
         if order.status == "cancelled":
             return "not_found"
 
-        pkg_id   = order.package_id
-        order.status = "cancelled"
-        s.commit()
+        pkg_id = order.package_id
 
-   
+        # Атомарно отменяем ТОЛЬКО если статус всё ещё "reserved" - если он уже
+        # успел смениться параллельно (выдан/истёк), ничего не перезаписываем
+        updated = s.query(Order).filter(
+            Order.code == code,
+            Order.status == "reserved",
+        ).update({Order.status: "cancelled"}, synchronize_session=False)
+
+        if not updated:
+            s.commit()
+            return "too_late"
+
+        s.query(Package).filter(Package.id == pkg_id).update(
+            {Package.quantity: Package.quantity + 1}, synchronize_session=False
+        )
+
         pkg = s.query(Package).filter_by(id=pkg_id).first()
         if pkg:
-            pkg.quantity += 1
-            rest_name = pkg.name
-            owner_id  = s.query(Restaurant).filter_by(id=pkg.restaurant_id).first()
-            owner_id  = owner_id.owner_id if owner_id else None
+            pkg_name = pkg.name
+            rest     = s.query(Restaurant).filter_by(id=pkg.restaurant_id).first()
+            owner_id = rest.owner_id if rest else None
             s.commit()
-            return f"ok|{rest_name}|{owner_id or ''}"
+            return f"ok|{pkg_name}|{owner_id or ''}"
 
+        s.commit()
         return "ok||"
     
 async def notify_rating_change(bot, user_id: int):
@@ -236,26 +266,33 @@ async def expire_old_reservations(bot) -> int:
             Order.reserved_until < get_now(),
         ).all()
 
+        payload = []
         for o in expired:
-            o.status = "cancelled"
-            pkg = s.query(Package).filter_by(id=o.package_id).first()
-            if pkg:
-                pkg.quantity += 1
-            try:
-                lang = get_lang(o.user_id)
-                await bot.send_message(
-                    o.user_id,
-                    t("reservation_expired", lang, code=o.code),
-                    parse_mode="Markdown",
-                )
-            except Exception:
-                pass
+            o.status = "expired"
+            s.query(Package).filter(Package.id == o.package_id).update(
+                {Package.quantity: Package.quantity + 1}, synchronize_session=False
+            )
+            payload.append((o.user_id, o.code))
 
-        if expired:
+        if payload:
             s.commit()
-            log.info(f"Expired {len(expired)} reservations")
 
-        return len(expired)
+    
+    for user_id, code in payload:
+        try:
+            lang = get_lang(user_id)
+            await bot.send_message(
+                user_id,
+                t("reservation_expired", lang, code=code),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+
+    if payload:
+        log.info(f"Expired {len(payload)} reservations")
+
+    return len(payload)
 
 async def send_pickup_reminders(bot):
 
@@ -273,27 +310,39 @@ async def send_pickup_reminders(bot):
             Order.reminder_sent == False,
         ).all()
 
+        payload = []
         for order in orders:
             pkg  = s.query(Package).filter_by(id=order.package_id).first()
             rest = s.query(Restaurant).filter_by(id=pkg.restaurant_id).first() if pkg else None
             if not rest:
                 continue
+            payload.append((
+                order.id, order.user_id, order.code, rest.name,
+                order.reserved_until.strftime("%H:%M"), rest.address,
+            ))
 
-            try:
-                lang = get_lang(order.user_id)
-                await bot.send_message(
-                    order.user_id,
-                    t("pickup_reminder", lang,
-                      code=order.code, rest=rest.name,
-                      until=order.reserved_until.strftime("%H:%M"),
-                      address=rest.address),
-                    parse_mode="Markdown",
-                )
-                order.reminder_sent = True
-            except Exception:
-                pass
+    # Сетевые вызовы - без открытой транзакции
+    sent_ids = []
+    for order_id, user_id, code, rest_name, until_str, address in payload:
+        try:
+            lang = get_lang(user_id)
+            await bot.send_message(
+                user_id,
+                t("pickup_reminder", lang, code=code, rest=rest_name,
+                  until=until_str, address=address),
+                parse_mode="Markdown",
+            )
+            sent_ids.append(order_id)
+        except Exception:
+            pass
 
-        s.commit()
+    if sent_ids:
+        with Session() as s:
+            s.query(Order).filter(Order.id.in_(sent_ids)).update(
+                {Order.reminder_sent: True}, synchronize_session=False
+            )
+            s.commit()
+            
 def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
     from datetime import date
     code = gen_code()
@@ -321,12 +370,18 @@ def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
             raise ValueError("Package not available")
 
         now   = get_now()
-        today = now.date()
+        today = pkg.available_date or now.date()
 
         ph, pm     = map(int, pkg.pickup_from.split(":"))
         eh, em     = map(int, pkg.pickup_to.split(":"))
         pickup_dt  = datetime(today.year, today.month, today.day, ph, pm)
         pickup_end = datetime(today.year, today.month, today.day, eh, em)
+        if pickup_end <= pickup_dt:
+            # окно выдачи переходит через полночь (например, 23:00-01:00)
+            pickup_end += timedelta(days=1)
+
+        if now >= pickup_end:
+            raise ValueError("pickup_closed")
 
         time_to_pickup = (pickup_dt - now).total_seconds()
 
@@ -335,13 +390,19 @@ def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
         else:
             reserved_until = now + timedelta(hours=1)
 
+        # Бронь не может обещать больше времени, чем реально открыто окно выдачи
+        reserved_until = min(reserved_until, pickup_end)
+
         pkg.quantity -= 1
+        from config import COMMISSION_RATE
         order = Order(
             code=code,
             package_id=pkg_id,
             user_id=user_id,
             username=username,
             status="reserved",
+            price=pkg.price,
+            commission=round(pkg.price * COMMISSION_RATE),
             reserved_until=reserved_until,
         )
         s.add(order)
@@ -351,28 +412,30 @@ def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
 def get_user_stats(user_id: int) -> dict:
     """Статистика пользователя для рейтинга"""
     with Session() as s:
-        total = s.query(Order).filter_by(user_id=user_id).count()
+        total     = s.query(Order).filter_by(user_id=user_id).count()
         cancelled = s.query(Order).filter_by(user_id=user_id, status="cancelled").count()
-        
-        # Последняя отмена
-        last_cancel = s.query(Order).filter_by(
-            user_id=user_id, status="cancelled"
+        no_show   = s.query(Order).filter_by(user_id=user_id, status="expired").count()
+
+        # Последний проблемный заказ - отмена ИЛИ неявка
+        last_bad = s.query(Order).filter(
+            Order.user_id == user_id,
+            Order.status.in_(["cancelled", "expired"]),
         ).order_by(Order.created_at.desc()).first()
-        
-        cancel_rate = (cancelled / total * 100) if total > 0 else 0
-        
-        # Проверяем блокировку (последняя отмена менее 24 часов назад + rate > 80%)
-        from datetime import date
+
+        unreliable  = cancelled + no_show
+        cancel_rate = (unreliable / total * 100) if total > 0 else 0
+
+        # Проверяем блокировку (последняя отмена/неявка менее 24 часов назад + rate > 80%)
         blocked = False
-        if cancel_rate > 80 and total >= 3 and last_cancel:
-            from datetime import timezone
-            hours_since = (get_now() - last_cancel.created_at).total_seconds() / 3600
+        if cancel_rate > 80 and total >= 3 and last_bad:
+            hours_since = (get_now() - last_bad.created_at).total_seconds() / 3600
             if hours_since < 24:
                 blocked = True
-        
+
         return {
             "total":       total,
             "cancelled":   cancelled,
+            "no_show":     no_show,
             "cancel_rate": cancel_rate,
             "blocked":     blocked,
         }
@@ -384,10 +447,9 @@ async def check_unblocked_users(bot):
 
     with Session() as s:
         # Находим пользователей с отменами за последние 25 часов
-        from datetime import timezone
         cutoff = get_now() - timedelta(hours=25)
         recent_cancels = s.query(Order.user_id).filter(
-            Order.status == "cancelled",
+            Order.status.in_(["cancelled", "expired"]),
             Order.created_at >= cutoff
         ).distinct().all()
 

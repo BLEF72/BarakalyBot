@@ -23,7 +23,7 @@ async def admin_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text  = t("admin_stats", lang,
               rests=stats["restaurants"], pkgs=stats["packages"],
               orders=stats["orders"],    done=stats["done"],
-              users=stats["users"])
+              users=stats["users"], commission=stats["commission"])
 
     await update.message.reply_text(
         text + "\n\n⚙️ *Панель администратора*",
@@ -70,7 +70,7 @@ async def admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Заказов нет.")
             return
         text  = "🧾 *Последние заказы:*\n\n"
-        icons = {"reserved": "⏳", "active": "✅", "used": "🎉", "cancelled": "❌"}
+        icons = {"reserved": "⏳", "active": "✅", "used": "🎉", "cancelled": "❌", "expired": "👻"}
         for o, pkg, rest in rows:
             icon  = icons.get(o.status, "❓")
             text += f"{icon} `{o.code}` @{o.username} | {rest.name} | {pkg.price:,} сум\n"
@@ -122,6 +122,7 @@ async def admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                  orders        = report["orders"],
                  done          = report["done"],
                  cancelled     = report["cancelled"],
+                 no_show       = report["no_show"],
                  revenue       = report["revenue"],
                  rating        = report["rating"],
                  total         = report["total"],
