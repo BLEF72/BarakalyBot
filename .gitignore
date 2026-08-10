@@ -6,3 +6,4 @@ __pycache__/
 .idea/
 .vscode/
 backups/
+bot_log.txt
