@@ -10,7 +10,7 @@ from database import init_db
 
 from utils.constants import LANG_SELECT, A_NAME, A_ADDRESS, A_DISTRICT,A_OWNER, A_PHOTO, A_LOCATION, O_NAME, O_PHOTO,O_PRICE, O_QTY, O_TIME, O_EDIT_PRICE,O_EDIT_QTY, O_TEMPLATE_QTY, O_UPDATE_PHOTO,O_EDIT_TIME, O_SELECT_REST
 
-from handlers.start  import start, lang_selected, cancel
+from handlers.start  import start, lang_selected, cancel,cancel_callback
 from handlers.buyer  import show_districts, district_selected, reserve_callback, my_orders, help_cmd, handle_text, handle_photo, favorite_callback, show_favorites, subscribe_rest_callback, subscribe_dist_callback, my_subscriptions,cancel_order_callback,rebook_callback,confirm_cancel_callback, keep_order_callback, show_top
 from handlers.owner import o_update_rest_photo, owner_panel, owner_callback, o_name, o_photo, o_price, o_qty, o_time, o_edit_price, o_edit_qty, o_template_qty,o_edit_time, handle_pickup_time
 from handlers.admin import admin_panel, admin_callback, a_name, a_address,  a_district, a_owner, a_photo, a_location, skip_rest_photo_callback, skip_rest_location_callback
@@ -83,7 +83,7 @@ def build_app() -> Application:
         states={
             LANG_SELECT: [CallbackQueryHandler(lang_selected, pattern="^lang_")],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel_callback, pattern="^flow_cancel$")],
     )
 
     # ── Админ: добавление заведения ──────────────────────────────────────────
@@ -103,7 +103,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(skip_rest_photo_callback, pattern="^skip_rest_photo$"),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel_callback, pattern="^flow_cancel$")],
     )
     
     pkg_conv = ConversationHandler(
@@ -121,7 +121,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(owner_callback, pattern="^pickuptime_"),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel_callback, pattern="^flow_cancel$")],
         per_message=False,
         per_chat=True,
     )
@@ -140,7 +140,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(owner_callback, pattern="^pickuptime_edit_"),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel_callback, pattern="^flow_cancel$")],
         per_message=False,
         per_chat=True,
     )
@@ -149,7 +149,7 @@ def build_app() -> Application:
         states={
             O_TEMPLATE_QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, o_template_qty)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel_callback, pattern="^flow_cancel$")],
         per_message=False,
         per_chat=True,
     )
@@ -159,12 +159,13 @@ def build_app() -> Application:
         states={
             O_UPDATE_PHOTO: [MessageHandler(filters.PHOTO, o_update_rest_photo)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel_callback, pattern="^flow_cancel$")],
         per_message=False,
         per_chat=True,
     )
 
     # ── Регистрируем хендлеры ────────────────────────────────────────────────
+    app.add_handler(CallbackQueryHandler(cancel_callback, pattern="^flow_cancel$"))
     app.add_handler(start_conv)
     app.add_handler(rest_conv)
     app.add_handler(edit_pkg_conv)

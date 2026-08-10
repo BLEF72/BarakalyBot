@@ -3,13 +3,16 @@ from database import Session, User, Restaurant, AnalyticsEvent
 from config import ADMIN_IDS
 
 
-def gen_code() -> str:
-    """Генерирует уникальный код заказа: XXXXXX"""
-    return  str(uuid.uuid4())[:6].upper()
+import secrets
+
+ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+
+
+def gen_code(n: int = 6) -> str:
+    return "".join(secrets.choice(ALPHABET) for _ in range(n))
 
 
 def get_lang(telegram_id: int) -> str:
-    """Возвращает язык пользователя (ru по умолчанию)"""
     with Session() as s:
         u = s.query(User).filter_by(telegram_id=telegram_id).first()
         return u.language if u else "ru"
@@ -82,3 +85,13 @@ def get_pickup_status(pickup_from: str, pickup_to: str, lang: str) -> str:
 
     # Выдача закончилась
     return ""
+
+async def clear_prev_cancel(ctx, chat_id):
+    """Убирает кнопку отмены с предыдущего шага диалога, чтобы на экране
+    всегда была видна только одна, актуальная кнопка"""
+    msg_id = ctx.user_data.pop("_cancel_msg_id", None)
+    if msg_id:
+        try:
+            await ctx.bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=None)
+        except Exception:
+            pass

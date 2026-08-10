@@ -35,3 +35,31 @@ def get_review_count(restaurant_id: int) -> int:
 def already_reviewed(order_code: str) -> bool:
     with Session() as s:
         return s.query(Review).filter_by(order_code=order_code).first() is not None
+    
+
+def get_ratings_batch(restaurant_ids) -> dict:
+    """Средний рейтинг сразу для нескольких заведений, одним запросом"""
+    if not restaurant_ids:
+        return {}
+    with Session() as s:
+        rows = (
+            s.query(Review.restaurant_id, func.avg(Review.rating))
+            .filter(Review.restaurant_id.in_(restaurant_ids))
+            .group_by(Review.restaurant_id)
+            .all()
+        )
+        return {rid: round(float(avg), 1) for rid, avg in rows}
+
+
+def get_review_counts_batch(restaurant_ids) -> dict:
+    """Количество отзывов сразу для нескольких заведений, одним запросом"""
+    if not restaurant_ids:
+        return {}
+    with Session() as s:
+        rows = (
+            s.query(Review.restaurant_id, func.count(Review.id))
+            .filter(Review.restaurant_id.in_(restaurant_ids))
+            .group_by(Review.restaurant_id)
+            .all()
+        )
+        return dict(rows)

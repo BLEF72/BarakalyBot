@@ -238,3 +238,28 @@ async def auto_open_restaurants(bot):
         except Exception:
             pass
 
+async def notify_subscribers(bot, subscribers, rest_name, pkg_name, price, qty, pfrom, pto, address):
+    import asyncio
+    from telegram.error import RetryAfter, Forbidden
+    from utils.helpers import get_lang
+    from texts import t
+
+    for user_id in subscribers:
+        try:
+            user_lang = get_lang(user_id)
+            msg = t("new_pkg_notify", user_lang,
+                    rest=rest_name, name=pkg_name,
+                    price=price, qty=qty,
+                    from_=pfrom, to=pto, address=address)
+            await bot.send_message(user_id, msg, parse_mode="Markdown")
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after)
+            try:
+                await bot.send_message(user_id, msg, parse_mode="Markdown")
+            except Exception:
+                pass
+        except Forbidden:
+            pass
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)

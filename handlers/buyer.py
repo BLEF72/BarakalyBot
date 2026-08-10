@@ -36,10 +36,15 @@ async def district_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await query.delete_message()
 
+    rest_ids      = {rest.id for _, rest in rows}
+    ratings       = review_service.get_ratings_batch(rest_ids)
+    review_counts = review_service.get_review_counts_batch(rest_ids)
+    fav_ids       = favorite_service.get_favorites_batch(uid, rest_ids)
+    sub_rest_ids  = subscription_service.get_subscribed_restaurants_batch(uid, rest_ids)
 
     for pkg, rest in rows:
-        rating  = review_service.get_rating(rest.id)
-        reviews = review_service.get_review_count(rest.id)
+        rating  = ratings.get(rest.id, 5.0)
+        reviews = review_counts.get(rest.id, 0)
         status  = get_pickup_status(pkg.pickup_from, pkg.pickup_to, lang)
 
         text = t("package_card", lang,
@@ -48,9 +53,8 @@ async def district_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
              name=pkg.name, price=pkg.price, qty=pkg.quantity,
              from_=pkg.pickup_from, to=pkg.pickup_to, status=status)
 
-        is_fav     = favorite_service.is_favorite(uid, rest.id)
-        is_sub_rest = subscription_service.is_subscribed_restaurant(uid, rest.id)
-        is_sub_dist = subscription_service.is_subscribed_district(uid, rest.district)
+        is_fav      = rest.id in fav_ids
+        is_sub_rest = rest.id in sub_rest_ids
 
         fav_label = "❤️ В избранном" if is_fav else "🤍 В избранное"
 
@@ -97,8 +101,10 @@ async def reserve_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     _processing_reservations.add(uid)
 
     from database import Session, Package, Restaurant
+    from utils.time_utils import get_now
+    today = get_now().date()
     with Session() as s:
-        pkg  = s.query(Package).filter_by(id=pkg_id, active=True).first()
+        pkg  = s.query(Package).filter_by(id=pkg_id, active=True, available_date=today).first()
         rest = s.query(Restaurant).filter_by(id=pkg.restaurant_id).first() if pkg else None
         if not pkg or pkg.quantity <= 0 or not rest:
             await ctx.bot.send_message(uid, t("already_taken", lang))
@@ -118,7 +124,8 @@ async def reserve_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except ValueError as e:
             err = str(e)
             if "user_blocked" in err:
-                await ctx.bot.send_message(uid, t("user_blocked", lang))
+                days_left = err.split("|")[1] if "|" in err else "?"
+                await ctx.bot.send_message(uid, t("user_blocked", lang, days=days_left))
             elif "user_limited" in err:
                 await ctx.bot.send_message(uid, t("user_limited", lang))
             elif "max_reservations" in err:
@@ -393,22 +400,59 @@ async def my_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    from database import Session, Restaurant
-    text = t("my_subscriptions_header", lang)
+    from database import Session, Restaurant, Package
+    from utils.time_utils import get_now
+    today = get_now().date()
+
+    rest_subs = [s for s in subs if s["restaurant_id"]]
+    dist_subs = [s for s in subs if s["district"]]
+
+    rest_cards = []
     with Session() as s:
-        for sub in subs:
-            if sub["restaurant_id"]:
-                rest = s.query(Restaurant).filter_by(id=sub["restaurant_id"]).first()
-                if rest:
-                    text += f"🏪 {rest.name} · {rest.district}\n"
-            elif sub["district"]:
-                text += f"📍 {sub['district']}\n"
-                
-    await update.message.reply_text(
-        text,
-        parse_mode="Markdown",
-        reply_markup=main_keyboard(lang),
-    )
+        for sub in rest_subs:
+            rest = s.query(Restaurant).filter_by(id=sub["restaurant_id"]).first()
+            if not rest:
+                continue
+            pkg_count = (
+                s.query(Package)
+                .filter_by(restaurant_id=rest.id, active=True, available_date=today)
+                .filter(Package.quantity > 0)
+                .count()
+            )
+            rest_cards.append((rest, pkg_count))
+
+    # сначала те, у кого сейчас есть пакеты
+    rest_cards.sort(key=lambda x: x[1] > 0, reverse=True)
+
+    if rest_cards:
+        for rest, pkg_count in rest_cards:
+            status_line = (
+                t("subs_has_packages", lang, count=pkg_count) if pkg_count > 0
+                else t("subs_no_packages", lang)
+            )
+            text = f"🏪 *{rest.name}*\n📍 {rest.address} · {rest.district}\n{status_line}"
+
+            buttons = []
+            if pkg_count > 0:
+                buttons.append(InlineKeyboardButton(t("btn_view_packages", lang), callback_data=f"district_{rest.district}"))
+            buttons.append(InlineKeyboardButton(t("btn_unsubscribe", lang), callback_data=f"sub_rest_{rest.id}"))
+
+            await update.message.reply_text(
+                text, parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([buttons])
+            )
+
+    if dist_subs:
+        for sub in dist_subs:
+            district = sub["district"]
+            buttons = [
+                InlineKeyboardButton(t("btn_view_packages", lang), callback_data=f"district_{district}"),
+                InlineKeyboardButton(t("btn_unsubscribe", lang), callback_data=f"sub_dist_{district}"),
+            ]
+            await update.message.reply_text(
+                f"📍 *{district}*", parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([buttons])
+            )
 
 async def cancel_order_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -491,8 +535,10 @@ async def rebook_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pkg_id = int(query.data.replace("rebook_", ""))
 
     from database import Session, Package, Restaurant
+    from utils.time_utils import get_now
+    today = get_now().date()
     with Session() as s:
-        pkg  = s.query(Package).filter_by(id=pkg_id, active=True).first()
+        pkg  = s.query(Package).filter_by(id=pkg_id, active=True, available_date=today).first()
         rest = s.query(Restaurant).filter_by(id=pkg.restaurant_id).first() if pkg else None
 
         if not pkg or pkg.quantity <= 0 or not rest:
@@ -510,10 +556,14 @@ async def rebook_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         username = query.from_user.username or query.from_user.first_name
         code = order_service.create_reservation(pkg_id, uid, username)
     except ValueError as e:
-        if "max_reservations" in str(e):
+        err = str(e)
+        if "max_reservations" in err:
             await ctx.bot.send_message(uid, t("max_reservations", lang))
-        elif "pickup_closed" in str(e):
+        elif "pickup_closed" in err:
             await ctx.bot.send_message(uid, t("pickup_closed", lang))
+        elif "user_blocked" in err:
+            days_left = err.split("|")[1] if "|" in err else "?"
+            await ctx.bot.send_message(uid, t("user_blocked", lang, days=days_left))
         else:
             await ctx.bot.send_message(uid, t("rebook_unavailable", lang))
         return

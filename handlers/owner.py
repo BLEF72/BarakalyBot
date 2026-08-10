@@ -1,3 +1,4 @@
+import datetime
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
@@ -50,16 +51,18 @@ async def _show_rest_panel(update, ctx, lang, rest, send_func="message"):
     from datetime import datetime
     from database import Order
     from sqlalchemy import func
+    from utils.time_utils import get_now
 
     uid = update.effective_user.id if hasattr(update, 'effective_user') and update.effective_user else update.callback_query.from_user.id
+    today = get_now().date()
 
     with Session() as s:
-        my_pkgs = s.query(Package).filter_by(restaurant_id=rest.id, active=True).all()
+        my_pkgs = s.query(Package).filter_by(restaurant_id=rest.id, active=True, available_date=today).all()
 
         today_count = (
             s.query(Order).join(Package, Order.package_id == Package.id)
             .filter(Package.restaurant_id == rest.id,
-                    Order.created_at >= datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0))
+                    Order.created_at >= get_now().replace(hour=0, minute=0, second=0, microsecond=0))
             .count()
         )
         total_orders = (
@@ -147,7 +150,9 @@ async def owner_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data["new_pkg"]        = {"restaurant_id": rest_id}
         ctx.user_data["adding_package"] = True
         ctx.user_data["pkg_state"]      = O_NAME
-        await query.edit_message_text(t("ask_pkg_name", lang), parse_mode="Markdown")
+        from keyboards.inline import with_cancel
+        msg = await query.edit_message_text(t("ask_pkg_name", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
+        ctx.user_data["_cancel_msg_id"] = msg.message_id
         return
 
     elif data.startswith("owner_select_rest_"):
@@ -155,7 +160,9 @@ async def owner_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data["new_pkg"]        = {"restaurant_id": rest_id}
         ctx.user_data["adding_package"] = True
         ctx.user_data["pkg_state"]      = O_NAME
-        await query.edit_message_text(t("ask_pkg_name", lang), parse_mode="Markdown")
+        from keyboards.inline import with_cancel
+        msg = await query.edit_message_text(t("ask_pkg_name", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
+        ctx.user_data["_cancel_msg_id"] = msg.message_id
         return
 
     elif data.startswith("owner_today_"):
@@ -203,29 +210,39 @@ async def owner_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pkg_id = int(data.replace("editpkg_price_", ""))
         ctx.user_data["edit_pkg_id"]     = pkg_id
         ctx.user_data["edit_pkg_action"] = "price"
-        await query.edit_message_text(t("ask_new_price", lang), parse_mode="Markdown")
+        from keyboards.inline import with_cancel
+        await query.edit_message_text(t("ask_new_price", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
         return O_EDIT_PRICE
 
     elif data.startswith("editpkg_qty_"):
         pkg_id = int(data.replace("editpkg_qty_", ""))
         ctx.user_data["edit_pkg_id"]     = pkg_id
         ctx.user_data["edit_pkg_action"] = "qty"
-        await query.edit_message_text(t("ask_new_qty", lang), parse_mode="Markdown")
+        from keyboards.inline import with_cancel
+        await query.edit_message_text(t("ask_new_qty", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
         return O_EDIT_QTY
 
     elif data.startswith("editpkg_time_"):
         pkg_id = int(data.replace("editpkg_time_", ""))
         ctx.user_data["edit_pkg_id"] = pkg_id
-        from keyboards.inline import pickup_time_keyboard
+        from keyboards.inline import pickup_time_keyboard, with_cancel
         await query.edit_message_text(
             t("ask_pkg_time", lang),
             parse_mode="Markdown",
-            reply_markup=pickup_time_keyboard(lang, prefix="pickuptime_edit")
+            reply_markup=with_cancel(lang, pickup_time_keyboard(lang, prefix="pickuptime_edit"))
         )
         return O_EDIT_TIME
 
-    elif data.startswith("editpkg_deact_"):
-        pkg_id = int(data.replace("editpkg_deact_", ""))
+    elif data.startswith("editpkg_deact_ask_"):
+        pkg_id = int(data.replace("editpkg_deact_ask_", ""))
+        confirm_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(t("btn_confirm_deactivate", lang), callback_data=f"editpkg_deact_yes_{pkg_id}"),
+            InlineKeyboardButton(t("btn_flow_cancel", lang), callback_data="flow_cancel"),
+        ]])
+        await query.edit_message_text(t("confirm_deactivate", lang), reply_markup=confirm_kb)
+
+    elif data.startswith("editpkg_deact_yes_"):
+        pkg_id = int(data.replace("editpkg_deact_yes_", ""))
         package_service.deactivate(pkg_id)
         await query.edit_message_text(t("pkg_deactivated", lang))
 
@@ -251,7 +268,8 @@ async def owner_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         rest_id      = int(parts[1])
         ctx.user_data["use_template_id"]      = template_id
         ctx.user_data["use_template_rest_id"] = rest_id
-        await query.edit_message_text(t("ask_template_qty", lang), parse_mode="Markdown")
+        from keyboards.inline import with_cancel
+        await query.edit_message_text(t("ask_template_qty", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
         return O_TEMPLATE_QTY
 
     elif data.startswith("savetpl_"):
@@ -298,7 +316,8 @@ async def owner_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("owner_update_photo_"):
         rest_id = int(data.replace("owner_update_photo_", ""))
         ctx.user_data["update_photo_rest_id"] = rest_id
-        await query.edit_message_text(t("ask_new_rest_photo", lang), parse_mode="Markdown")
+        from keyboards.inline import with_cancel
+        await query.edit_message_text(t("ask_new_rest_photo", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
         return O_UPDATE_PHOTO
 
     elif data.startswith("owner_close_rest_"):
@@ -360,7 +379,11 @@ async def o_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         skip_kb = InlineKeyboardMarkup([[
             InlineKeyboardButton(t("btn_skip_photo", lang), callback_data="skip_pkg_photo")
         ]])
-        await update.message.reply_text(t("ask_pkg_photo", lang), parse_mode="Markdown", reply_markup=skip_kb)
+        from keyboards.inline import with_cancel
+        from utils.helpers import clear_prev_cancel
+        await clear_prev_cancel(ctx, update.effective_chat.id)
+        msg = await update.message.reply_text(t("ask_pkg_photo", lang), parse_mode="Markdown", reply_markup=with_cancel(lang, skip_kb))
+        ctx.user_data["_cancel_msg_id"] = msg.message_id
         return O_PHOTO
 
 
@@ -370,7 +393,11 @@ async def o_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             update.message.photo[-1].file_id if update.message.photo else None
         )
         ctx.user_data["pkg_state"] = O_PRICE
-        await update.message.reply_text(t("ask_pkg_price", lang), parse_mode="Markdown")
+        from keyboards.inline import with_cancel
+        from utils.helpers import clear_prev_cancel
+        await clear_prev_cancel(ctx, update.effective_chat.id)
+        msg = await update.message.reply_text(t("ask_pkg_price", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
+        ctx.user_data["_cancel_msg_id"] = msg.message_id
         return O_PRICE
 
 
@@ -378,9 +405,16 @@ async def o_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
     try:
         price = int(update.message.text.replace(" ", "").replace(",", ""))
+        if price <= 0:
+            await update.message.reply_text(t("must_be_positive", lang))
+            return O_PRICE
         ctx.user_data["new_pkg"]["price"] = price
         ctx.user_data["pkg_state"]        = O_QTY
-        await update.message.reply_text(t("ask_pkg_qty", lang), parse_mode="Markdown")
+        from keyboards.inline import with_cancel
+        from utils.helpers import clear_prev_cancel
+        await clear_prev_cancel(ctx, update.effective_chat.id)
+        msg = await update.message.reply_text(t("ask_pkg_qty", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
+        ctx.user_data["_cancel_msg_id"] = msg.message_id
         return O_QTY
     except ValueError:
         await update.message.reply_text(t("invalid_number", lang))
@@ -390,14 +424,21 @@ async def o_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def o_qty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
     try:
-        ctx.user_data["new_pkg"]["quantity"] = int(update.message.text.strip())
+        qty = int(update.message.text.strip())
+        if qty <= 0:
+            await update.message.reply_text(t("must_be_positive", lang))
+            return O_QTY
+        ctx.user_data["new_pkg"]["quantity"] = qty
         ctx.user_data["pkg_state"]           = O_TIME
-        from keyboards.inline import pickup_time_keyboard
-        await update.message.reply_text(
+        from keyboards.inline import pickup_time_keyboard, with_cancel
+        from utils.helpers import clear_prev_cancel
+        await clear_prev_cancel(ctx, update.effective_chat.id)
+        msg = await update.message.reply_text(
             t("ask_pkg_time", lang),
             parse_mode="Markdown",
-            reply_markup=pickup_time_keyboard(lang)
+            reply_markup=with_cancel(lang, pickup_time_keyboard(lang))
         )
+        ctx.user_data["_cancel_msg_id"] = msg.message_id
         return O_TIME
     except ValueError:
         await update.message.reply_text(t("invalid_number", lang))
@@ -414,6 +455,8 @@ async def o_time(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     ctx.user_data["new_pkg"]["pickup_from"] = match.group(1).replace(".", ":")
     ctx.user_data["new_pkg"]["pickup_to"]   = match.group(2).replace(".", ":")
+    from utils.helpers import clear_prev_cancel
+    await clear_prev_cancel(ctx, update.effective_chat.id)
     await _save_package(update, ctx, lang)
     return ConversationHandler.END
 
@@ -514,12 +557,11 @@ async def _save_package(update, ctx, lang):
                 pass
             await asyncio.sleep(0.05)  # не больше ~20 сообщений в секунду
 
+    from services.package_service import notify_subscribers
     ctx.application.create_task(
-        _notify_subscribers(subscribers, rest_name, data["name"], data["price"],
-                            data["quantity"], pickup_from, pickup_to, rest_address)
+        notify_subscribers(bot, subscribers, rest_name, data["name"], data["price"],
+                           data["quantity"], pickup_from, pickup_to, rest_address)
     )
-
-    ctx.user_data.clear()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -529,7 +571,10 @@ async def _save_package(update, ctx, lang):
 async def o_edit_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
     try:
-        price  = int(update.message.text.replace(" ", "").replace(",", ""))
+        price = int(update.message.text.replace(" ", "").replace(",", ""))
+        if price <= 0:
+            await update.message.reply_text(t("must_be_positive", lang))
+            return O_EDIT_PRICE
         pkg_id = ctx.user_data.get("edit_pkg_id")
         package_service.update_price(pkg_id, price)
         await update.message.reply_text(t("pkg_updated", lang))
@@ -543,7 +588,10 @@ async def o_edit_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def o_edit_qty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
     try:
-        qty    = int(update.message.text.strip())
+        qty = int(update.message.text.strip())
+        if qty <= 0:
+            await update.message.reply_text(t("must_be_positive", lang))
+            return O_EDIT_QTY
         pkg_id = ctx.user_data.get("edit_pkg_id")
         package_service.update_quantity(pkg_id, qty)
         await update.message.reply_text(t("pkg_updated", lang))
@@ -579,7 +627,10 @@ async def o_edit_time(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def o_template_qty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
     try:
-        qty         = int(update.message.text.strip())
+        qty = int(update.message.text.strip())
+        if qty <= 0:
+            await update.message.reply_text(t("must_be_positive", lang))
+            return O_TEMPLATE_QTY
         template_id = ctx.user_data.get("use_template_id")
         rest_id     = ctx.user_data.get("use_template_rest_id")
         tpl         = template_service.get_template(template_id)
@@ -604,6 +655,35 @@ async def o_template_qty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             s.commit()
 
         await update.message.reply_text(t("template_pkg_added", lang))
+
+        with Session() as s:
+            new_pkg = s.query(Package).filter_by(
+                restaurant_id=rest_id, name=tpl.name
+            ).order_by(Package.id.desc()).first()
+            rest = s.query(Restaurant).filter_by(id=rest_id).first()
+            new_pkg_id = new_pkg.id if new_pkg else None
+            if new_pkg:
+                s.expunge(new_pkg)
+            if rest:
+                s.expunge(rest)
+
+        if new_pkg_id and rest:
+            from services.package_service import post_to_channel, notify_subscribers
+            from services.review_service import get_rating
+            from services import subscription_service
+
+            rating = get_rating(rest_id)
+            await post_to_channel(ctx.bot, new_pkg, rest, rating)
+
+            subscribers = set(
+                subscription_service.get_subscribers_for_restaurant(rest_id) +
+                subscription_service.get_subscribers_for_district(rest.district)
+            )
+            ctx.application.create_task(
+                notify_subscribers(ctx.bot, subscribers, rest.name, tpl.name, tpl.price,
+                                   qty, tpl.pickup_from, tpl.pickup_to, rest.address)
+            )
+
         ctx.user_data.clear()
         return ConversationHandler.END
     except ValueError:

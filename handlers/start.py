@@ -70,3 +70,13 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(lang),
     )
     return ConversationHandler.END
+
+async def cancel_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    from utils.helpers import get_lang
+    query = update.callback_query
+    await query.answer()
+    lang = get_lang(query.from_user.id)
+    ctx.user_data.clear()
+    await query.edit_message_text(t("cancelled", lang))
+    await ctx.bot.send_message(query.from_user.id, "⌨️", reply_markup=main_keyboard(lang))
+    return ConversationHandler.END

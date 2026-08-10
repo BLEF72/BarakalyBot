@@ -92,7 +92,8 @@ async def admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "admin_add_rest":
         ctx.user_data["new_rest"] = {}
-        await query.edit_message_text(t("admin_add_rest_name", lang))
+        from keyboards.inline import with_cancel
+        await query.edit_message_text(t("admin_add_rest_name", lang), reply_markup=with_cancel(lang))
         return A_NAME
     elif data == "admin_reports":
         rests = report_service.get_all_restaurants()
@@ -137,6 +138,8 @@ async def admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         
 async def a_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    from utils.helpers import clear_prev_cancel
+    await clear_prev_cancel(ctx, update.effective_chat.id)
     if not is_admin(update.effective_user.id): return ConversationHandler.END
     lang = get_lang(update.effective_user.id)
 
@@ -154,12 +157,13 @@ async def skip_rest_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYP
     await query.answer()
     lang  = get_lang(query.from_user.id)
     ctx.user_data["new_rest"]["photo_file_id"] = None
+    from keyboards.inline import with_cancel
     await query.edit_message_text(
         t("ask_rest_location", lang),
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[
+        reply_markup=with_cancel(lang, InlineKeyboardMarkup([[
             InlineKeyboardButton(t("btn_skip_location", lang), callback_data="skip_rest_location")
-        ]])
+        ]]))
     )
     return A_LOCATION
 
@@ -201,7 +205,11 @@ async def a_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     ctx.user_data["new_rest"]["name"] = update.message.text.strip()
     lang = get_lang(update.effective_user.id)
-    await update.message.reply_text(t("admin_add_rest_address", lang))
+    from keyboards.inline import with_cancel
+    from utils.helpers import clear_prev_cancel
+    await clear_prev_cancel(ctx, update.effective_chat.id)
+    msg = await update.message.reply_text(t("admin_add_rest_address", lang), reply_markup=with_cancel(lang))
+    ctx.user_data["_cancel_msg_id"] = msg.message_id
     return A_ADDRESS
 
 
@@ -212,11 +220,15 @@ async def a_address(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     skip_kb = InlineKeyboardMarkup([[
         InlineKeyboardButton(t("btn_skip_location", lang), callback_data="skip_rest_location")
     ]])
-    await update.message.reply_text(
+    from keyboards.inline import with_cancel
+    from utils.helpers import clear_prev_cancel
+    await clear_prev_cancel(ctx, update.effective_chat.id)
+    msg = await update.message.reply_text(
         t("ask_rest_location", lang),
         parse_mode="Markdown",
-        reply_markup=skip_kb
+        reply_markup=with_cancel(lang, skip_kb)
     )
+    ctx.user_data["_cancel_msg_id"] = msg.message_id
     return A_LOCATION
 
 
@@ -225,7 +237,9 @@ async def a_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     lang = get_lang(query.from_user.id)
     ctx.user_data["new_rest"]["district"] = query.data.replace("adistrict_", "")
-    await query.edit_message_text(t("admin_add_rest_owner", lang), parse_mode="Markdown")
+    from keyboards.inline import with_cancel
+    await query.edit_message_text(t("admin_add_rest_owner", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
+    ctx.user_data["_cancel_msg_id"] = query.message.message_id
     return A_OWNER
 
 
@@ -244,11 +258,15 @@ async def a_owner(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     skip_kb = InlineKeyboardMarkup([[
         InlineKeyboardButton(t("btn_skip_rest_photo", lang), callback_data="skip_rest_photo")
     ]])
-    await update.message.reply_text(
+    from keyboards.inline import with_cancel
+    from utils.helpers import clear_prev_cancel
+    await clear_prev_cancel(ctx, update.effective_chat.id)
+    msg = await update.message.reply_text(
         t("ask_rest_photo", lang),
         parse_mode="Markdown",
-        reply_markup=skip_kb
+        reply_markup=with_cancel(lang, skip_kb)
     )
+    ctx.user_data["_cancel_msg_id"] = msg.message_id
     return A_PHOTO
 
 
@@ -263,10 +281,14 @@ async def a_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data["new_rest"]["latitude"]  = None
         ctx.user_data["new_rest"]["longitude"] = None
 
-    await update.message.reply_text(
+    from keyboards.inline import with_cancel
+    from utils.helpers import clear_prev_cancel
+    await clear_prev_cancel(ctx, update.effective_chat.id)
+    msg = await update.message.reply_text(
         t("admin_add_rest_district", lang),
-        reply_markup=district_select_keyboard(lang),
+        reply_markup=with_cancel(lang, district_select_keyboard(lang)),
     )
+    ctx.user_data["_cancel_msg_id"] = msg.message_id
     return A_DISTRICT
 
 
@@ -277,7 +299,8 @@ async def skip_rest_location_callback(update: Update, ctx: ContextTypes.DEFAULT_
     ctx.user_data["new_rest"]["latitude"]  = None
     ctx.user_data["new_rest"]["longitude"] = None
 
+    from keyboards.inline import with_cancel
     await query.edit_message_text(
         t("admin_add_rest_district", lang),
-        reply_markup=district_select_keyboard(lang))
+        reply_markup=with_cancel(lang, district_select_keyboard(lang)))
     return A_DISTRICT

@@ -66,3 +66,14 @@ def get_user_subscriptions(user_id: int):
                 "district":      sub.district,
             })
         return result
+    
+def get_subscribed_restaurants_batch(user_id: int, restaurant_ids) -> set:
+    """Множество ID заведений, на которые подписан пользователь, одним запросом"""
+    if not restaurant_ids:
+        return set()
+    with Session() as s:
+        rows = s.query(Subscription.restaurant_id).filter(
+            Subscription.user_id == user_id,
+            Subscription.restaurant_id.in_(restaurant_ids),
+        ).all()
+        return {rid for (rid,) in rows}

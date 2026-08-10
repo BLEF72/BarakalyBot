@@ -1,5 +1,13 @@
+import secrets
+
+ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # без 0/O, 1/I/L - их путают на слух и глаз
 import logging
 from datetime import datetime, timedelta
+from sqlalchemy.exc import IntegrityError
+
+def gen_code(n: int = 6) -> str:
+    """Генерирует код брони из символов, которые не путаются между собой на слух/глаз"""
+    return "".join(secrets.choice(ALPHABET) for _ in range(n))
 
 from database import Session, Order, Package, Restaurant
 from config import RESERVE_MINUTES, ADMIN_IDS
@@ -8,64 +16,6 @@ from utils.time_utils import get_now
 from texts import t
 
 log = logging.getLogger(__name__)
-
-
-def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
-    code = gen_code()
-
-    stats = get_user_stats(user_id)
-    with Session() as s:
-        if stats["blocked"]:
-            raise ValueError("user_blocked")
-
-        # Лимит броней зависит от рейтинга
-        max_reservations = 1 if stats["cancel_rate"] > 50 and stats["total"] >= 3 else 2
-
-        active_count = s.query(Order).filter(
-            Order.user_id == user_id,
-            Order.status == "reserved"
-        ).count()
-        if active_count >= max_reservations:
-            if stats["cancel_rate"] > 50:
-                raise ValueError("user_limited")
-            raise ValueError("max_reservations")
-
-        pkg = s.query(Package).filter_by(id=pkg_id, active=True).first()
-        if not pkg or pkg.quantity <= 0:
-            raise ValueError("Package not available")
-
-        now   = get_now()
-        today = now.date()
-
-        ph, pm     = map(int, pkg.pickup_from.split(":"))
-        eh, em     = map(int, pkg.pickup_to.split(":"))
-        pickup_dt  = datetime(today.year, today.month, today.day, ph, pm)
-        pickup_end = datetime(today.year, today.month, today.day, eh, em)
-
-        time_to_pickup = (pickup_dt - now).total_seconds()
-
-        if time_to_pickup > 3600:
-            reserved_until = pickup_dt + timedelta(minutes=30)
-        else:
-            reserved_until = now + timedelta(hours=1)
-
-        updated = s.query(Package).filter(
-            Package.id == pkg_id,
-            Package.active == True,
-            Package.quantity > 0,
-        ).update({Package.quantity: Package.quantity - 1}, synchronize_session=False)
-
-        if not updated:
-            raise ValueError("sold_out")
-
-        order = Order(
-            code=code, package_id=pkg_id, user_id=user_id,
-            username=username, status="reserved",
-            reserved_until=reserved_until,
-        )
-        s.add(order)
-        s.commit()
-    return code
 
 
 def mark_done(code: str, actor_id: int) -> str:
@@ -344,16 +294,28 @@ async def send_pickup_reminders(bot):
             s.commit()
             
 def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
-    from datetime import date
-    code = gen_code()
+    for attempt in range(5):
+        code = gen_code()
+        try:
+            return _create_reservation_attempt(pkg_id, user_id, username, code)
+        except IntegrityError:
+            continue
+    raise ValueError("sold_out")
+
+
+def _create_reservation_attempt(pkg_id: int, user_id: int, username: str, code: str) -> str:
     with Session() as s:
         # Проверяем блокировку и рейтинг
         stats = get_user_stats(user_id)
         if stats["blocked"]:
-            raise ValueError("user_blocked")
+            days_left = 1
+            if stats["unblock_at"]:
+                days_left = max(1, int((stats["unblock_at"] - get_now()).total_seconds() // 86400) + 1)
+            raise ValueError(f"user_blocked|{days_left}")
 
-        # Лимит броней зависит от рейтинга
-        max_reservations = 1 if stats["cancel_rate"] > 50 and stats["total"] >= 3 else 2
+        # Лимит броней зависит от количества неявок за окно
+        from config import NO_SHOW_CAP_THRESHOLD
+        max_reservations = 1 if stats["no_show"] >= NO_SHOW_CAP_THRESHOLD else 2
 
         active_count = s.query(Order).filter(
             Order.user_id == user_id,
@@ -361,7 +323,7 @@ def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
         ).count()
 
         if active_count >= max_reservations:
-            if stats["cancel_rate"] > 50:
+            if stats["no_show"] >= NO_SHOW_CAP_THRESHOLD:
                 raise ValueError("user_limited")
             raise ValueError("max_reservations")
 
@@ -393,7 +355,15 @@ def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
         # Бронь не может обещать больше времени, чем реально открыто окно выдачи
         reserved_until = min(reserved_until, pickup_end)
 
-        pkg.quantity -= 1
+        updated = s.query(Package).filter(
+            Package.id == pkg_id,
+            Package.active == True,
+            Package.quantity > 0,
+        ).update({Package.quantity: Package.quantity - 1}, synchronize_session=False)
+
+        if not updated:
+            raise ValueError("sold_out")
+
         from config import COMMISSION_RATE
         order = Order(
             code=code,
@@ -410,59 +380,92 @@ def create_reservation(pkg_id: int, user_id: int, username: str) -> str:
     return code
 
 def get_user_stats(user_id: int) -> dict:
-    """Статистика пользователя для рейтинга"""
+    """Статистика пользователя - скользящее окно NO_SHOW_WINDOW_DAYS дней,
+    блокировка зависит только от количества настоящих неявок, не отмен"""
+    from config import (
+        NO_SHOW_WINDOW_DAYS, NO_SHOW_BLOCK_THRESHOLD, NO_SHOW_BLOCK_DAYS,
+        NO_SHOW_REVIEW_THRESHOLD, NO_SHOW_REVIEW_BLOCK_DAYS,
+    )
+    window_start = get_now() - timedelta(days=NO_SHOW_WINDOW_DAYS)
+
     with Session() as s:
         total     = s.query(Order).filter_by(user_id=user_id).count()
         cancelled = s.query(Order).filter_by(user_id=user_id, status="cancelled").count()
-        no_show   = s.query(Order).filter_by(user_id=user_id, status="expired").count()
 
-        # Последний проблемный заказ - отмена ИЛИ неявка
-        last_bad = s.query(Order).filter(
+        no_shows = s.query(Order).filter(
             Order.user_id == user_id,
-            Order.status.in_(["cancelled", "expired"]),
-        ).order_by(Order.created_at.desc()).first()
+            Order.status == "expired",
+            Order.created_at >= window_start,
+        ).order_by(Order.created_at.desc()).all()
 
-        unreliable  = cancelled + no_show
-        cancel_rate = (unreliable / total * 100) if total > 0 else 0
+        no_show_count = len(no_shows)
+        last_no_show  = no_shows[0] if no_shows else None
+        cancel_rate   = ((cancelled + no_show_count) / total * 100) if total > 0 else 0
 
-        # Проверяем блокировку (последняя отмена/неявка менее 24 часов назад + rate > 80%)
-        blocked = False
-        if cancel_rate > 80 and total >= 3 and last_bad:
-            hours_since = (get_now() - last_bad.created_at).total_seconds() / 3600
-            if hours_since < 24:
+        blocked      = False
+        block_days   = 0
+        needs_review = False
+
+        if no_show_count >= NO_SHOW_REVIEW_THRESHOLD:
+            block_days, needs_review = NO_SHOW_REVIEW_BLOCK_DAYS, True
+        elif no_show_count >= NO_SHOW_BLOCK_THRESHOLD:
+            block_days = NO_SHOW_BLOCK_DAYS
+
+        if block_days and last_no_show:
+            days_since = (get_now() - last_no_show.created_at).total_seconds() / 86400
+            if days_since < block_days:
                 blocked = True
 
+        unblock_at = None
+        if blocked and last_no_show:
+            unblock_at = last_no_show.created_at + timedelta(days=block_days)
+
         return {
-            "total":       total,
-            "cancelled":   cancelled,
-            "no_show":     no_show,
-            "cancel_rate": cancel_rate,
-            "blocked":     blocked,
+            "total":        total,
+            "cancelled":    cancelled,
+            "no_show":      no_show_count,
+            "cancel_rate":  cancel_rate,
+            "blocked":      blocked,
+            "needs_review": needs_review,
+            "unblock_at":   unblock_at,
         }
 
 async def check_unblocked_users(bot):
-    """Каждый час проверяем пользователей у которых истекла блокировка"""
+    """Каждый час: оповещает админов о пользователях, которым нужна ручная
+    проверка (много неявок), и сообщает пользователю, если блокировка истекла"""
     from utils.helpers import get_lang
     from texts import t
+    from config import ADMIN_IDS, NO_SHOW_WINDOW_DAYS
 
     with Session() as s:
-        # Находим пользователей с отменами за последние 25 часов
-        cutoff = get_now() - timedelta(hours=25)
-        recent_cancels = s.query(Order.user_id).filter(
-            Order.status.in_(["cancelled", "expired"]),
+        cutoff = get_now() - timedelta(days=NO_SHOW_WINDOW_DAYS)
+        recent_no_shows = s.query(Order.user_id).filter(
+            Order.status == "expired",
             Order.created_at >= cutoff
         ).distinct().all()
 
-        for (user_id,) in recent_cancels:
-            stats = get_user_stats(user_id)
-            # Если блокировка только что истекла (rate > 80% но уже 24+ часов)
-            if stats["cancel_rate"] > 80 and not stats["blocked"] and stats["total"] >= 3:
+    for (user_id,) in recent_no_shows:
+        stats = get_user_stats(user_id)
+
+        if stats["needs_review"]:
+            for aid in ADMIN_IDS:
                 try:
-                    lang = get_lang(user_id)
                     await bot.send_message(
-                        user_id,
-                        t("user_unblocked", lang),
-                        parse_mode="Markdown"
+                        aid,
+                        f"⚠️ Пользователь {user_id}: {stats['no_show']} неявок "
+                        f"за {NO_SHOW_WINDOW_DAYS} дней - нужна ручная проверка."
                     )
                 except Exception:
                     pass
+            continue
+
+        if not stats["blocked"] and stats["no_show"] >= 3:
+            try:
+                lang = get_lang(user_id)
+                await bot.send_message(
+                    user_id,
+                    t("user_unblocked", lang),
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass

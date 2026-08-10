@@ -8,6 +8,13 @@ from utils.time_utils import get_now
 
 Base = declarative_base()
 engine = create_engine("sqlite:///foodsave.db", echo=False)
+
+# ⚠️ ВАЖНО: сервисы возвращают ORM-объекты после s.expunge() (отсоединённые
+# от сессии). Никогда не обращайся к *связям* (relationship, например
+# pkg.restaurant, rest.packages) на таком объекте вне блока Session() -
+# это упадёт с DetachedInstanceError. Обычные колонки (pkg.name, pkg.price)
+# читать безопасно, они уже загружены. Если нужны связанные данные - делай
+# отдельный явный запрос/JOIN внутри Session(), как везде в этом проекте.
 Session = sessionmaker(bind=engine)
 
 # ─────────────────────────────────────────────

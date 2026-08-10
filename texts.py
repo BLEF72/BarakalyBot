@@ -14,8 +14,8 @@ TX = {
 
     # Старт / язык
     "choose_lang": {
-        "ru": "Здравствуйте! 👋\nВыбери язык / Tilni tanlang:",
-        "uz": "Assalomu alekom! 👋\nTilni tanlang / Выбери язык:"
+        "ru": "Здравствуйте! 👋\nВыберите язык / Tilni tanlang:",
+        "uz": "Assalomu alekom! 👋\nTilni tanlang / Выберите язык:"
     },
     "welcome": {
         "ru": (
@@ -39,7 +39,7 @@ TX = {
 
     # Выбор района
     "choose_district": {
-        "ru": "📍 Выбери район Ташкента:",
+        "ru": "📍 Выберите район Ташкента:",
         "uz": "📍 Toshkent tumanini tanlang:"
     },
     "all_districts": {"ru": "🗺 Все районы", "uz": "🗺 Barcha tumanlar"},
@@ -72,7 +72,7 @@ TX = {
         "🕒 Забрать: {from_} – {to}\n"
         "💵 Оплата: *наличными при получении*\n\n"
         "⏳ Бронь действует до *{until}*.\n"
-        "Если не придёте — бронь снимается автоматически."
+        "Если не придёте во время,бронь снимается автоматически."
     ),
     "uz": (
         "🎉 *Bron qilindi!*\n\n"
@@ -82,7 +82,7 @@ TX = {
         "🕒 Olish vaqti: {from_} – {to}\n"
         "💵 To'lov: *kelganda naqd*\n\n"
         "⏳ Bron *{until}* gacha amal qiladi.\n"
-        "Kelmasangiz, bron avtomatik tarzda bekor qilinadi."
+        "Vaqtida Kelmasangiz, bron avtomatik tarzda bekor qilinadi."
     )
 },
     "reservation_expired": {
@@ -302,6 +302,30 @@ TX = {
     "ru": "🔔 *Ваши подписки:*\n\n",
     "uz": "🔔 *Obunalaringiz:*\n\n"
 },
+"my_subs_restaurants_header": {
+    "ru": "🏪 *Заведения*",
+    "uz": "🏪 *Muassasalar*"
+},
+"my_subs_districts_header": {
+    "ru": "📍 *Районы*",
+    "uz": "📍 *Tumanlar*"
+},
+"subs_has_packages": {
+    "ru": "🟢 Сейчас есть пакетов: {count}",
+    "uz": "🟢 Hozir paketlar bor: {count}"
+},
+"subs_no_packages": {
+    "ru": "⚪️ Сейчас нет доступных пакетов",
+    "uz": "⚪️ Hozir paket yo'q"
+},
+"btn_view_packages": {
+    "ru": "👀 Смотреть",
+    "uz": "👀 Ko'rish"
+},
+"btn_unsubscribe": {
+    "ru": "🔕 Отписаться",
+    "uz": "🔕 Obunani bekor qilish"
+},
 "new_pkg_notify": {
     "ru": "🆕 *Новый пакет в {rest}!*\n\n🛍 {name}\n💰 {price:,} сум\n📦 Осталось: {qty} шт.\n🕒 Забрать: {from_} – {to}\n\n📍 {address}",
     "uz": "🆕 *{rest} da yangi paket!*\n\n🛍 {name}\n💰 {price:,} so'm\n📦 Qoldi: {qty} ta\n🕒 Olish vaqti: {from_} – {to}\n\n📍 {address}"
@@ -487,8 +511,8 @@ TX = {
     "uz": "⚠️ Sizda bekor qilishlar foizi yuqori. Sizga faqat 1 ta faol bron ruxsat etiladi."
 },
 "user_blocked": {
-    "ru": "🚫 Вы временно заблокированы из-за частых отмен. Попробуйте через 24 часа.",
-    "uz": "🚫 Ketma-ket bekor qilish sababli vaqtincha bloklangansiz. 24 soatdan keyin urinib ko'ring."
+    "ru": "🚫 Вы временно заблокированы из-за неявок за забронированными заказами. Осталось дней: {days}.",
+    "uz": "🚫 Bron qilingan buyurtmalarga kelmaganingiz sababli vaqtincha bloklangansiz. Qolgan kunlar: {days}."
 },
 "cancel_warning": {
     "ru": (
@@ -670,7 +694,22 @@ TX = {
     "ru": "⌛ Время брони истекло, покупатель не пришёл вовремя, отметить выданным нельзя.",
     "uz": "⌛ Bu bron muddati tugagan, xaridor o'z vaqtida kelmadi, 'Berildi' deb belgilab bo'lmaydi."
 },
-
+"btn_flow_cancel": {
+    "ru": "❌ Отмена",
+    "uz": "❌ Bekor qilish"
+},
+"must_be_positive": {
+    "ru": "❌ Число должно быть больше нуля.",
+    "uz": "❌ Raqam noldan katta bo'lishi kerak."
+},
+"confirm_deactivate": {
+    "ru": "⚠️ Деактивировать этот пакет? Пакет нельзя будет включить обратно вручную",
+    "uz": "⚠️ Bu paketni faolsizlantirasizmi? Paketni qayta yoqib bo'lmaydi"
+},
+"btn_confirm_deactivate": {
+    "ru": "✅ Да, деактивировать",
+    "uz": "✅ Ha, faolsizlantirish"
+},
 }
 
 

@@ -115,7 +115,7 @@ def edit_pkg_keyboard(lang: str, pkg_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t("btn_edit_price", lang), callback_data=f"editpkg_price_{pkg_id}")],
         [InlineKeyboardButton(t("btn_edit_qty",   lang), callback_data=f"editpkg_qty_{pkg_id}")],
         [InlineKeyboardButton("🕒 " + ("Изменить время" if True else ""), callback_data=f"editpkg_time_{pkg_id}")],
-        [InlineKeyboardButton(t("btn_deactivate", lang), callback_data=f"editpkg_deact_{pkg_id}")],
+        [InlineKeyboardButton(t("btn_deactivate", lang), callback_data=f"editpkg_deact_ask_{pkg_id}")],
     ])
 
 def owner_panel_keyboard(lang: str, restaurant_id: int = 0, is_closed: bool = False) -> InlineKeyboardMarkup:
@@ -152,3 +152,11 @@ def pickup_time_keyboard(lang: str, prefix: str = "pickuptime") -> InlineKeyboar
         buttons.append(row)
     buttons.append([InlineKeyboardButton(custom, callback_data=f"{prefix}_custom")])
     return InlineKeyboardMarkup(buttons)
+
+
+def with_cancel(lang: str, keyboard: InlineKeyboardMarkup = None) -> InlineKeyboardMarkup:
+    """Добавляет кнопку отмены к существующей клавиатуре (или создаёт новую из одной кнопки)"""
+    cancel_row = [InlineKeyboardButton(t("btn_flow_cancel", lang), callback_data="flow_cancel")]
+    rows = list(keyboard.inline_keyboard) if keyboard else []
+    rows.append(cancel_row)
+    return InlineKeyboardMarkup(rows)

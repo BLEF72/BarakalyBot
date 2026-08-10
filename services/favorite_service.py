@@ -24,7 +24,9 @@ def is_favorite(user_id: int, restaurant_id: int) -> bool:
 
 
 def get_user_favorites(user_id: int):
-    """Возвращает [(Restaurant, [Package])] избранных заведений с активными пакетами"""
+    """Возвращает [(Restaurant, [Package])] избранных заведений с активными пакетами на сегодня"""
+    from utils.time_utils import get_now
+    today = get_now().date()
     with Session() as s:
         favs = s.query(Favorite).filter_by(user_id=user_id).all()
         result = []
@@ -33,10 +35,22 @@ def get_user_favorites(user_id: int):
             if not rest:
                 continue
             pkgs = s.query(Package).filter_by(
-                restaurant_id=rest.id, active=True
+                restaurant_id=rest.id, active=True, available_date=today
             ).filter(Package.quantity > 0).all()
             s.expunge(rest)
             for p in pkgs:
                 s.expunge(p)
             result.append((rest, pkgs))
         return result
+    
+
+def get_favorites_batch(user_id: int, restaurant_ids) -> set:
+    """Множество ID заведений, добавленных пользователем в избранное, одним запросом"""
+    if not restaurant_ids:
+        return set()
+    with Session() as s:
+        rows = s.query(Favorite.restaurant_id).filter(
+            Favorite.user_id == user_id,
+            Favorite.restaurant_id.in_(restaurant_ids),
+        ).all()
+        return {rid for (rid,) in rows}
