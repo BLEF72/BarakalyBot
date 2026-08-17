@@ -31,6 +31,10 @@ TX = {
             "Quyidagi tugmalardan foydalaning 👇"
         )
     },
+    "language_changed": {
+    "ru": "✅ Язык изменён",
+    "uz": "✅ Til o'zgartirildi"
+},
 
     # Главное меню (ReplyKeyboard)
     "btn_packages":  {"ru": "🛍 Пакеты",       "uz": "🛍 Paketlar"},
@@ -108,6 +112,7 @@ TX = {
         "active":    {"ru": "✅ Подтверждён",   "uz": "✅ Tasdiqlangan"},
         "used":      {"ru": "🎉 Выдан",          "uz": "🎉 Berilgan"},
         "cancelled": {"ru": "❌ Отменён",        "uz": "❌ Bekor qilingan"},
+        "expired":   {"ru": "👻 Не пришли",      "uz": "👻 Kelmadi"},
     },
 
     # Помощь
@@ -362,6 +367,11 @@ TX = {
     "ru": "Вы уже оценили этот заказ.",
     "uz": "Siz bu buyurtmani allaqachon baholagansiz."
 },
+"rating_new": {
+    "ru": "Новое",
+    "uz": "Yangi"
+
+},
 "btn_rebook": {
     "ru": "🔄 Забронировать снова",
     "uz": "🔄 Qayta bron qilish"
@@ -445,6 +455,10 @@ TX = {
 "btn_support": {
     "ru": "💬 Поддержка",
     "uz": "💬 Qo'llab-quvvatlash"
+},
+"btn_support_reply": {
+    "ru": "↩️ Ответить",
+    "uz": "↩️ Javob berish"
 },
 "support_ask": {
     "ru": "💬 Напишите своё сообщение — мы ответим в ближайшее время:",
@@ -710,6 +724,22 @@ TX = {
     "ru": "✅ Да, деактивировать",
     "uz": "✅ Ha, faolsizlantirish"
 },
+"claim_invalid": {
+    "ru": "❌ Код недействителен или уже использован.",
+    "uz": "❌ Kod noto'g'ri yoki allaqachon ishlatilgan."
+},
+"claim_success": {
+    "ru": "✅ Заведение *{rest}* привязано к вашему аккаунту! Команда /mypanel теперь доступна.",
+    "uz": "✅ *{rest}* muassasasi hisobingizga bog'landi! /mypanel buyrug'i endi mavjud."
+},
+"btn_gen_claim_code": {
+    "ru": "🔑 Сгенерировать код вместо ID",
+    "uz": "🔑 ID o'rniga kod yaratish"
+},
+"claim_code_generated": {
+    "ru": "🔑 Код для владельца: `{code}`\n\nОтправьте его владельцу заведения. Ему нужно написать боту:\n`/start claim_{code}`",
+    "uz": "🔑 Muassasa egasi uchun kod: `{code}`\n\nUni muassasa egasiga yuboring. U botga yozishi kerak:\n`/start claim_{code}`"
+},
 }
 
 
@@ -733,7 +763,10 @@ def t(key: str, lang: str, **kwargs) -> str:
             k: md_escape(v) if isinstance(v, str) else v
             for k, v in kwargs.items()
         }
-        return text.format(**safe_kwargs)
+        try:
+            return text.format(**safe_kwargs)
+        except KeyError:
+            return text  
     return text
 
 

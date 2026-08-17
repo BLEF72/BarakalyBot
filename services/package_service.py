@@ -141,28 +141,35 @@ def search(query: str):
         s.expunge_all()
         return rows
             
-async def post_to_channel(bot, pkg, rest, rating: float):
+async def post_to_channel(bot, pkg, rest, rating):
     """Постим новый пакет в канал"""
     from config import CHANNEL_ID
     from texts import t
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     from services.review_service import get_review_count
 
     try:
+        rating_display = rating if rating is not None else "Новое"
         text = t("channel_post", "ru",
                  rest=rest.name, address=rest.address, district=rest.district,
-                 rating=rating, name=pkg.name, price=pkg.price,
+                 rating=rating_display, name=pkg.name, price=pkg.price,
                  qty=pkg.quantity, from_=pkg.pickup_from, to=pkg.pickup_to)
+
+        bot_username = bot.username
+        deep_link_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛒 Забронировать", url=f"https://t.me/{bot_username}?start=pkg_{pkg.id}")
+        ]])
 
         photo = pkg.photo_file_id or rest.photo_file_id
 
         if photo:
             await bot.send_photo(
                 CHANNEL_ID, photo,
-                caption=text, parse_mode="Markdown"
+                caption=text, parse_mode="Markdown", reply_markup=deep_link_kb
             )
         else:
             await bot.send_message(
-                CHANNEL_ID, text, parse_mode="Markdown"
+                CHANNEL_ID, text, parse_mode="Markdown", reply_markup=deep_link_kb
             )
     except Exception as e:
         import logging

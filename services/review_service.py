@@ -18,13 +18,13 @@ def add_review(user_id: int, restaurant_id: int, order_code: str, rating: int):
         return True
 
 
-def get_rating(restaurant_id: int) -> float:
-    """Средний рейтинг заведения. 5.0 если отзывов нет."""
+def get_rating(restaurant_id: int):
+    """Средний рейтинг заведения. None, если отзывов ещё нет - не выдумываем цифру."""
     with Session() as s:
         result = s.query(func.avg(Review.rating)).filter_by(
             restaurant_id=restaurant_id
         ).scalar()
-        return round(float(result), 1) if result else 5.0
+        return round(float(result), 1) if result else None
 
 
 def get_review_count(restaurant_id: int) -> int:

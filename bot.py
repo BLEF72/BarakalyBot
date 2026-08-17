@@ -10,10 +10,10 @@ from database import init_db
 
 from utils.constants import LANG_SELECT, A_NAME, A_ADDRESS, A_DISTRICT,A_OWNER, A_PHOTO, A_LOCATION, O_NAME, O_PHOTO,O_PRICE, O_QTY, O_TIME, O_EDIT_PRICE,O_EDIT_QTY, O_TEMPLATE_QTY, O_UPDATE_PHOTO,O_EDIT_TIME, O_SELECT_REST
 
-from handlers.start  import start, lang_selected, cancel,cancel_callback
+from handlers.start  import start, lang_selected, cancel,cancel_callback, language_command
 from handlers.buyer  import show_districts, district_selected, reserve_callback, my_orders, help_cmd, handle_text, handle_photo, favorite_callback, show_favorites, subscribe_rest_callback, subscribe_dist_callback, my_subscriptions,cancel_order_callback,rebook_callback,confirm_cancel_callback, keep_order_callback, show_top
 from handlers.owner import o_update_rest_photo, owner_panel, owner_callback, o_name, o_photo, o_price, o_qty, o_time, o_edit_price, o_edit_qty, o_template_qty,o_edit_time, handle_pickup_time
-from handlers.admin import admin_panel, admin_callback, a_name, a_address,  a_district, a_owner, a_photo, a_location, skip_rest_photo_callback, skip_rest_location_callback
+from handlers.admin import admin_panel, admin_callback, a_name, a_address,  a_district, a_owner, a_photo, a_location, skip_rest_photo_callback, skip_rest_location_callback, gen_owner_claim_callback
 from handlers.orders import done_callback, review_callback
 from handlers.support import support_cancel_callback, support_reply_callback
 from services.order_service import expire_old_reservations, send_pickup_reminders, check_unblocked_users
@@ -80,6 +80,7 @@ def build_app() -> Application:
     # ── /start — выбор языка ─────────────────────────────────────────────────
     start_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
+        allow_reentry=True,
         states={
             LANG_SELECT: [CallbackQueryHandler(lang_selected, pattern="^lang_")],
         },
@@ -97,7 +98,10 @@ def build_app() -> Application:
                 CallbackQueryHandler(skip_rest_location_callback, pattern="^skip_rest_location$"),
             ],
             A_DISTRICT: [CallbackQueryHandler(a_district, pattern="^adistrict_")],
-            A_OWNER:    [MessageHandler(filters.TEXT & ~filters.COMMAND, a_owner)],
+            A_OWNER:    [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, a_owner),
+                CallbackQueryHandler(gen_owner_claim_callback, pattern="^gen_owner_claim$"),
+            ],  
             A_PHOTO:    [
                 MessageHandler(filters.PHOTO, a_photo),
                 CallbackQueryHandler(skip_rest_photo_callback, pattern="^skip_rest_photo$"),
@@ -166,6 +170,7 @@ def build_app() -> Application:
 
     # ── Регистрируем хендлеры ────────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(cancel_callback, pattern="^flow_cancel$"))
+    app.add_handler(CallbackQueryHandler(lang_selected, pattern="^lang_"))
     app.add_handler(start_conv)
     app.add_handler(rest_conv)
     app.add_handler(edit_pkg_conv)
@@ -177,6 +182,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("mypanel", owner_panel))
     app.add_handler(CommandHandler("admin",   admin_panel))
     app.add_handler(CommandHandler("cancel",  cancel))
+    app.add_handler(CommandHandler("language", language_command))
     app.add_handler(CallbackQueryHandler(admin_callback,    pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(owner_callback, pattern="^skip_pkg_photo$"))
     app.add_handler(CallbackQueryHandler(owner_callback, pattern="^editpkg_"))
@@ -206,6 +212,28 @@ def build_app() -> Application:
 
     # ── Планировщик ──────────────────────────────────────────────────────────
     async def on_startup(application: Application): 
+        from telegram import BotCommand
+        await application.bot.set_my_commands([
+            BotCommand("start",    "🚀 Запустить бота / Botni ishga tushirish"),
+            BotCommand("language", "🌍 Язык / Til"),
+        ])
+
+        # Отдельное меню с /mypanel только для тех, у кого есть заведение
+        from telegram import BotCommandScopeChat
+        from database import Session, Restaurant
+        owner_commands = [
+            BotCommand("start",    "🚀 Запустить бота / Botni ishga tushirish"),
+            BotCommand("language", "🌍 Язык / Til"),
+            BotCommand("mypanel",  "🏪 Панель заведения / Muassasa paneli"),
+        ]
+        with Session() as s:
+            owner_ids = {r.owner_id for r in s.query(Restaurant).filter(Restaurant.owner_id.isnot(None)).all()}
+        for oid in owner_ids:
+            try:
+                await application.bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(chat_id=oid))
+            except Exception:
+                pass
+
         scheduler = AsyncIOScheduler()
         scheduler.add_job(expire_old_reservations, "interval", minutes=5,
                           args=[application.bot])

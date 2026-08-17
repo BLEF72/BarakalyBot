@@ -43,13 +43,14 @@ async def district_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sub_rest_ids  = subscription_service.get_subscribed_restaurants_batch(uid, rest_ids)
 
     for pkg, rest in rows:
-        rating  = ratings.get(rest.id, 5.0)
+        rating  = ratings.get(rest.id)
         reviews = review_counts.get(rest.id, 0)
         status  = get_pickup_status(pkg.pickup_from, pkg.pickup_to, lang)
 
+        rating_display = rating if rating is not None else t("rating_new", lang)
         text = t("package_card", lang,
              rest=rest.name, address=rest.address, district=rest.district,
-             rating=rating, reviews=reviews,
+             rating=rating_display, reviews=reviews,
              name=pkg.name, price=pkg.price, qty=pkg.quantity,
              from_=pkg.pickup_from, to=pkg.pickup_to, status=status)
 
@@ -84,6 +85,62 @@ async def district_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                      parse_mode="Markdown", reply_markup=kb)
         else:
             await ctx.bot.send_message(uid, text, parse_mode="Markdown", reply_markup=kb)
+            
+async def show_deep_link_package(uid: int, pkg_id: int, ctx: ContextTypes.DEFAULT_TYPE, lang: str):
+    """Показывает карточку одного конкретного пакета - используется при переходе
+    по ссылке из поста в канале (диплинк /start pkg_123)"""
+    from database import Session, Package, Restaurant
+    from utils.time_utils import get_now
+
+    today = get_now().date()
+    with Session() as s:
+        pkg  = s.query(Package).filter_by(id=pkg_id, active=True, available_date=today).first()
+        rest = s.query(Restaurant).filter_by(id=pkg.restaurant_id).first() if pkg else None
+        if not pkg or pkg.quantity <= 0 or not rest:
+            await ctx.bot.send_message(uid, t("already_taken", lang))
+            return
+        rest_id, rest_name, rest_addr, rest_district = rest.id, rest.name, rest.address, rest.district
+        rest_lat, rest_lon = rest.latitude, rest.longitude
+        pkg_price, pkg_qty = pkg.price, pkg.quantity
+        pfrom, pto = pkg.pickup_from, pkg.pickup_to
+        pkg_name = pkg.name
+        photo = pkg.photo_file_id or rest.photo_file_id
+
+    rating  = review_service.get_rating(rest_id)
+    reviews = review_service.get_review_count(rest_id)
+    rating_display = rating if rating is not None else t("rating_new", lang)
+    status = get_pickup_status(pfrom, pto, lang)
+
+    text = t("package_card", lang,
+             rest=rest_name, address=rest_addr, district=rest_district,
+             rating=rating_display, reviews=reviews,
+             name=pkg_name, price=pkg_price, qty=pkg_qty,
+             from_=pfrom, to=pto, status=status)
+
+    is_fav      = favorite_service.is_favorite(uid, rest_id)
+    is_sub_rest = subscription_service.is_subscribed_restaurant(uid, rest_id)
+
+    buttons = [
+        [InlineKeyboardButton(t("btn_reserve", lang, price=pkg_price), callback_data=f"reserve_{pkg_id}")],
+        [InlineKeyboardButton(
+            "❤️ В избранном" if is_fav else "🤍 В избранное",
+            callback_data=f"fav_{rest_id}"
+        ),
+        InlineKeyboardButton(
+            "🔕" if is_sub_rest else "🔔",
+            callback_data=f"sub_rest_{rest_id}"
+        )],
+    ]
+    if rest_lat and rest_lon:
+        map_url = f"https://maps.google.com/?q={rest_lat},{rest_lon}"
+        buttons.append([InlineKeyboardButton(t("btn_open_map", lang), url=map_url)])
+
+    kb = InlineKeyboardMarkup(buttons)
+
+    if photo:
+        await ctx.bot.send_photo(uid, photo, caption=text, parse_mode="Markdown", reply_markup=kb)
+    else:
+        await ctx.bot.send_message(uid, text, parse_mode="Markdown", reply_markup=kb)
 
 
 async def reserve_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -273,8 +330,10 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ctx.user_data.get("action") == "support":
         await handle_support_message(update, ctx); return
 
-    if ctx.user_data.get("action") == "support_reply":
-        await handle_support_reply(update, ctx); return
+    from config import ADMIN_IDS
+    if uid in ADMIN_IDS and update.message.reply_to_message:
+        if await handle_support_reply(update, ctx):
+            return
     
     if ctx.user_data.get("action") == "search":
         await handle_search(update, ctx); return

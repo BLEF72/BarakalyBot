@@ -33,6 +33,7 @@ class Restaurant(Base):
     address       = Column(String(255), nullable=False)
     district      = Column(String(80),  nullable=False)
     owner_id      = Column(BigInteger, nullable=True, index=True)
+    claim_code    = Column(String(10), nullable=True, unique=True)
     photo_file_id = Column(String(255), nullable=True)
     latitude      = Column(Float, nullable=True)
     longitude     = Column(Float, nullable=True)
@@ -80,6 +81,18 @@ class AnalyticsEvent(Base):
     user_id    = Column(BigInteger, nullable=True)
     district   = Column(String(80), nullable=True)
     created_at = Column(DateTime, default=get_now)
+    
+class SupportTicket(Base):
+    __tablename__ = "support_tickets"
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    user_id     = Column(BigInteger, nullable=False, index=True)
+    username    = Column(String(80), nullable=True)
+    message     = Column(Text, nullable=False)
+    status      = Column(String(20), default="open")  # open|answered
+    admin_id    = Column(BigInteger, nullable=True)
+    reply_text  = Column(Text, nullable=True)
+    created_at  = Column(DateTime, default=get_now)
+    replied_at  = Column(DateTime, nullable=True)
 
 class Favorite(Base):
     __tablename__ ="Favorites"

@@ -153,19 +153,14 @@ async def a_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def skip_rest_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    from utils.helpers import clear_prev_cancel
     query = update.callback_query
     await query.answer()
     lang  = get_lang(query.from_user.id)
+    await clear_prev_cancel(ctx, query.message.chat_id)
     ctx.user_data["new_rest"]["photo_file_id"] = None
-    from keyboards.inline import with_cancel
-    await query.edit_message_text(
-        t("ask_rest_location", lang),
-        parse_mode="Markdown",
-        reply_markup=with_cancel(lang, InlineKeyboardMarkup([[
-            InlineKeyboardButton(t("btn_skip_location", lang), callback_data="skip_rest_location")
-        ]]))
-    )
-    return A_LOCATION
+    await _save_restaurant(update, ctx, lang)
+    return ConversationHandler.END
 
 
 async def _save_restaurant(update, ctx, lang):
@@ -176,7 +171,8 @@ async def _save_restaurant(update, ctx, lang):
             name          = data["name"],
             address       = data["address"],
             district      = data["district"],
-            owner_id      = owner_id,
+            owner_id      = data.get("owner_id"),
+            claim_code    = data.get("claim_code"),
             photo_file_id = data.get("photo_file_id"),
             latitude      = data.get("latitude"),
             longitude     = data.get("longitude"),
@@ -186,6 +182,16 @@ async def _save_restaurant(update, ctx, lang):
         if u and u.role == "buyer":
             u.role = "owner"
         s.commit()
+
+    try:
+        from telegram import BotCommand, BotCommandScopeChat
+        await ctx.bot.set_my_commands([
+            BotCommand("start",    "🚀 Запустить бота / Botni ishga tushirish"),
+            BotCommand("language", "🌍 Язык / Til"),
+            BotCommand("mypanel",  "🏪 Панель заведения / Muassasa paneli"),
+        ], scope=BotCommandScopeChat(chat_id=owner_id))
+    except Exception:
+        pass
 
     uid = update.effective_user.id if update.effective_user else update.callback_query.from_user.id
     try:
@@ -238,7 +244,10 @@ async def a_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(query.from_user.id)
     ctx.user_data["new_rest"]["district"] = query.data.replace("adistrict_", "")
     from keyboards.inline import with_cancel
-    await query.edit_message_text(t("admin_add_rest_owner", lang), parse_mode="Markdown", reply_markup=with_cancel(lang))
+    claim_kb = with_cancel(lang, InlineKeyboardMarkup([[
+        InlineKeyboardButton(t("btn_gen_claim_code", lang), callback_data="gen_owner_claim")
+    ]]))
+    await query.edit_message_text(t("admin_add_rest_owner", lang), parse_mode="Markdown", reply_markup=claim_kb)
     ctx.user_data["_cancel_msg_id"] = query.message.message_id
     return A_OWNER
 
@@ -262,6 +271,35 @@ async def a_owner(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from utils.helpers import clear_prev_cancel
     await clear_prev_cancel(ctx, update.effective_chat.id)
     msg = await update.message.reply_text(
+        t("ask_rest_photo", lang),
+        parse_mode="Markdown",
+        reply_markup=with_cancel(lang, skip_kb)
+    )
+    ctx.user_data["_cancel_msg_id"] = msg.message_id
+    return A_PHOTO
+
+
+async def gen_owner_claim_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    lang = get_lang(query.from_user.id)
+
+    from utils.helpers import gen_code
+    code = gen_code(8)
+    ctx.user_data["new_rest"]["claim_code"] = code
+    ctx.user_data["new_rest"]["owner_id"]   = None
+
+    await query.edit_message_text(
+        t("claim_code_generated", lang, code=code),
+        parse_mode="Markdown"
+    )
+
+    from keyboards.inline import with_cancel
+    skip_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(t("btn_skip_rest_photo", lang), callback_data="skip_rest_photo")
+    ]])
+    msg = await ctx.bot.send_message(
+        query.from_user.id,
         t("ask_rest_photo", lang),
         parse_mode="Markdown",
         reply_markup=with_cancel(lang, skip_kb)
